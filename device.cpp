@@ -1,0 +1,141 @@
+#include "device.hpp"
+
+#ifdef _WIN32
+#include <windows.h>
+#endif
+
+PSVR2Device::PSVR2Device() : ctx(nullptr), dev_handle(nullptr), running(false) {
+    libusb_init(&ctx);
+}
+
+PSVR2Device::~PSVR2Device() {
+    running = false;
+    if (recv_thread_handle.joinable()) {
+        recv_thread_handle.join();
+    }
+    if (dev_handle) {
+        libusb_release_interface(dev_handle, CTRL_INTERFACE);
+        libusb_close(dev_handle);
+    }
+    if (ctx) {
+        libusb_exit(ctx);
+    }
+}
+
+int PSVR2Device::raw_ctrl(uint8_t bmRequestType, uint8_t bRequest, uint16_t wValue, uint16_t wIndex, std::vector<uint8_t>& data, int timeout) {
+    if (!dev_handle) return -1;
+
+    uint16_t wLength = static_cast<uint16_t>(data.size());
+
+    return libusb_control_transfer(dev_handle, bmRequestType, bRequest, wValue, wIndex, data.data(), wLength, timeout);
+}
+
+bool PSVR2Device::connect() {
+    dev_handle = libusb_open_device_with_vid_pid(ctx, VID, PID);
+    if (!dev_handle) return false;
+
+    libusb_set_auto_detach_kernel_driver(dev_handle, 1);
+
+    libusb_config_descriptor* cfg = nullptr;
+    libusb_device* dev = libusb_get_device(dev_handle);
+
+#ifndef _WIN32
+    // Detach both the control interface (0) and our Bulk interface
+    for (int iface : {CTRL_INTERFACE, BRIDGE_INTERFACE}) {
+        if (libusb_kernel_driver_active(dev_handle, iface) == 1) {
+            libusb_detach_kernel_driver(dev_handle, iface);
+        }
+    }
+#endif
+
+    // Explicitly claim the primary bulk interface
+    libusb_claim_interface(dev_handle, CTRL_INTERFACE);
+    libusb_claim_interface(dev_handle, BRIDGE_INTERFACE);
+
+    running = true;
+
+    send_keep_alive();
+    return true;
+}
+
+bool PSVR2Device::reconnect(int retries) {
+    for (int i = 0; i < retries; i++) {
+        if (connect()) return true;
+        std::this_thread::sleep_for(std::chrono::seconds(1));
+    }
+    return false;
+}
+
+void PSVR2Device::send_keep_alive() {
+    if (!dev_handle) return;
+    last_keep_alive = std::chrono::steady_clock::now();
+    // Implementation omitted in Python wrapper, kept structure
+}
+
+void PSVR2Device::check_keep_alive() {
+    auto now = std::chrono::steady_clock::now();
+    if (std::chrono::duration_cast<std::chrono::seconds>(now - last_keep_alive).count() > KEEP_ALIVE_INTERVAL) {
+        send_keep_alive();
+    }
+}
+
+std::vector<uint8_t> PSVR2Device::hid_get(uint8_t report_id, uint8_t sub_id, uint16_t length) {
+    std::vector<uint8_t> data(length, 0);
+    
+    int res = raw_ctrl(0xA1, 0x01, (sub_id << 8) | report_id, CTRL_INTERFACE, data);
+    if (res < 0) return {};
+    data.resize(res);
+    return data;
+}
+
+int PSVR2Device::hid_set(uint8_t report_id, uint8_t sub_id, const std::vector<uint8_t>& data_in) {
+    std::vector<uint8_t> data = data_in; 
+    
+    return raw_ctrl(0x21, 0x09, (sub_id << 8) | report_id, CTRL_INTERFACE, data);
+}
+
+bool PSVR2Device::vendor_set(uint8_t report_id, uint16_t subcmd, const std::vector<uint8_t>& data, int timeout) {
+    std::vector<uint8_t> buf;
+    buf.reserve(8 + data.size());
+    buf.push_back(report_id);
+    buf.push_back(0x00);
+    buf.push_back(subcmd & 0xFF);
+    buf.push_back((subcmd >> 8) & 0xFF);
+    buf.push_back(data.size() & 0xFF);
+    buf.push_back((data.size() >> 8) & 0xFF);
+    buf.push_back(0x00);
+    buf.push_back(0x00);
+    buf.insert(buf.end(), data.begin(), data.end());
+
+    int res = raw_ctrl(0x42, 0x09, 0, CTRL_INTERFACE, buf, timeout);
+    
+    return res >= 0;
+}
+
+std::vector<uint8_t> PSVR2Device::get_config_desc(uint16_t length) {
+    std::vector<uint8_t> data(length, 0);
+    int res = raw_ctrl(0x80, 0x06, (2 << 8) | 0, 1, data);
+    if (res < 0) return {};
+    data.resize(res);
+    return data;
+}
+
+bool PSVR2Device::trigger_get_alt() {
+    uint8_t buffer[1] = {0};
+    int res = libusb_control_transfer(
+        dev_handle, 
+        LIBUSB_ENDPOINT_IN | LIBUSB_REQUEST_TYPE_STANDARD | LIBUSB_RECIPIENT_INTERFACE, 
+        LIBUSB_REQUEST_GET_INTERFACE, 
+        0,
+        CTRL_INTERFACE,
+        buffer, 
+        sizeof(buffer), 
+        1000
+    );
+    return res >= 0; 
+}
+
+bool PSVR2Device::force_reboot() {
+    std::vector<uint8_t> payload = {};
+    return vendor_set(0x05, 0x02, payload, 1000);
+}
