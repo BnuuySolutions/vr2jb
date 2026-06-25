@@ -1,0 +1,3 @@
+[submodule "vr2bridge"]
+	path = vr2bridge
+	url = https://github.com/BnuuySolutions/vr2bridge
