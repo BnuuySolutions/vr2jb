@@ -47,7 +47,9 @@ void PSVR2Shell::execute_command(const std::vector<std::string>& args) {
     else if (cmd == "reboot") do_reboot(cmd_args);
     else if (cmd == "shell") do_shell(cmd_args);
     else if (cmd == "upload") do_upload(cmd_args);
-    else if (cmd == "exec") do_exec(cmd_args);
+    else if (cmd == "sessions") bridge->list_sessions();
+    else if (cmd == "attach") do_attach(cmd_args);
+    else if (cmd == "kill") do_kill(cmd_args);
     else LOG_ERROR << "[-] Unknown command: " << cmd << "\n";
 }
 
@@ -113,19 +115,6 @@ void PSVR2Shell::do_upload(const std::vector<std::string>& args) {
     bridge->upload(args[0], args[1]);
 }
 
-void PSVR2Shell::do_exec(const std::vector<std::string>& args) {
-    if (args.empty()) {
-        LOG_ERROR << "Usage: exec <command> [args...]\n";
-        return;
-    }
-    
-    std::string cmd;
-    for (const auto& a : args) cmd += a + " ";
-    cmd.pop_back(); // Remove trailing space
-
-    bridge->exec(cmd);
-}
-
 void PSVR2Shell::do_shell(const std::vector<std::string>& args) {
     // Determine which shell to run. Default to "sh" if no args provided.
     std::string shell_cmd = "sh";
@@ -136,4 +125,22 @@ void PSVR2Shell::do_shell(const std::vector<std::string>& args) {
     }
 
     bridge->shell(shell_cmd);
+}
+
+void PSVR2Shell::do_attach(const std::vector<std::string>& args) {
+    if (args.empty()) {
+        LOG_ERROR << "Usage: attach <session_id>\n";
+        return;
+    }
+    uint32_t session_id = std::stoul(args[0]);
+    bridge->shell("", session_id);
+}
+
+void PSVR2Shell::do_kill(const std::vector<std::string>& args) {
+    if (args.empty()) {
+        LOG_ERROR << "Usage: kill <session_id>\n";
+        return;
+    }
+    uint32_t session_id = std::stoul(args[0]);
+    bridge->kill_session(session_id);
 }

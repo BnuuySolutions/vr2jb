@@ -61,7 +61,6 @@ int main(int argc, char* argv[]) {
         }
     }
 
-    // Step 3: Discover write registers
     LOG_INFO << "[3/3] Setting up write...\n";
     
     if (!krw.setup_write()) {
@@ -74,36 +73,11 @@ int main(int argc, char* argv[]) {
     
     PSVR2Bridge bridge(usb.get_handle());
     bridge.upload("./busybox", "/tmp/busybox");
-    bridge.exec("/tmp/busybox mkdir /tmp/bin");
-    bridge.exec("/tmp/busybox --install /tmp/bin");
+    bridge.shell("/tmp/busybox mkdir /tmp/bin");
+    bridge.shell("/tmp/busybox --install /tmp/bin");
 
     // Start interactive shell
     PSVR2Shell shell(&usb, &krw, &bridge);
-
-    // bridge.exec("pkill -STOP VrhmdMain");
-
-    // shell.do_patch({
-    //     "VrhmdMain", 
-    //     "0x1a088d", "00"
-    // });
-    // shell.do_patch({
-    //     "VrhmdMain", 
-    //     "0x1ee90", "1f400071"
-    // });
-    // shell.do_patch({
-    //     "VrhmdMain", 
-    //     "0x1ee98", "e01b8e92"
-    // });
-    // shell.do_patch({
-    //     "VrhmdMain", 
-    //     "0xc5bf4", "1f2003d5"
-    // });
-    // shell.do_patch({
-    //     "VrhmdMain", 
-    //     "0x11968", "680c00f01f3522391f2003d5"
-    // });
-
-    // bridge.exec("pkill -CONT VrhmdMain");
 
     if (interactive) {
         try {

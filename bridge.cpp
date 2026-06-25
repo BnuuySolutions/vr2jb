@@ -1,5 +1,6 @@
 #include "bridge.hpp"
 #include "logger.hpp"
+#include "./vr2bridge/bridge_protocol.hpp"
 
 #include <iostream>
 #include <fstream>
@@ -34,39 +35,10 @@ static int _getch() {
 }
 #endif
 
-// ==========================================
-// Protocol Definitions
-// ==========================================
-#pragma pack(push, 1)
-struct PacketHeader {
-    uint8_t  magic;       
-    uint8_t  type;        
-    uint16_t length;      
-};
-#pragma pack(pop)
-
-enum PacketType : uint8_t {
-    PKT_TTY_IN = 1,
-    PKT_TTY_OUT = 2,
-    PKT_TTY_START = 3,
-    PKT_TTY_STOP = 4,
-    PKT_FILE_START = 10,
-    PKT_FILE_DATA = 11,
-    PKT_FILE_END = 12,
-    PKT_FILE_ERR = 13,
-    PKT_EXEC_CMD = 20,
-    PKT_EXEC_OUT = 21,
-    PKT_EXEC_ERR = 22,
-    PKT_EXEC_EXIT = 23
-};
-
-#define PKT_MAGIC 0xA5
-#define MAX_PAYLOAD_SIZE (4096 - sizeof(PacketHeader))
-
 PSVR2Bridge::PSVR2Bridge(libusb_device_handle* dev_handle) : dev(dev_handle) {}
 
-bool PSVR2Bridge::send_packet(uint8_t type, const uint8_t* payload, uint16_t len) {
-    PacketHeader hdr = { PKT_MAGIC, type, len };
+bool PSVR2Bridge::send_packet(uint8_t type, uint32_t session_id, const uint8_t* payload, uint16_t len) {
+    PacketHeader hdr = { PKT_MAGIC, type, len, session_id };
     std::vector<uint8_t> tx_buf {};
     
     tx_buf.reserve(sizeof(hdr) + len);
@@ -76,7 +48,7 @@ bool PSVR2Bridge::send_packet(uint8_t type, const uint8_t* payload, uint16_t len
     }
 
     int actual;
-    return (libusb_bulk_transfer(dev, 0x04, tx_buf.data(), tx_buf.size(), &actual, 1000) == 0);
+    return (libusb_bulk_transfer(dev, 0x04, tx_buf.data(), static_cast<int>(tx_buf.size()), &actual, 1000) == 0);
 }
 
 void PSVR2Bridge::upload(const std::string& local_path, const std::string& remote_path) {
@@ -93,7 +65,7 @@ void PSVR2Bridge::upload(const std::string& local_path, const std::string& remot
 
     LOG_INFO << "[*] Uploading to " << remote_path << "..." << std::endl;
     
-    if (!send_packet(PKT_FILE_START, (const uint8_t*)remote_path.c_str(), remote_path.length())) {
+    if (!send_packet(PKT_FILE_START, 0, (const uint8_t*)remote_path.c_str(), static_cast<uint16_t>(remote_path.length()))) {
         LOG_ERROR << "[-] Failed to send file start command." << std::endl;
         return;
     }
@@ -101,126 +73,99 @@ void PSVR2Bridge::upload(const std::string& local_path, const std::string& remot
     uint8_t buffer[MAX_PAYLOAD_SIZE];
     size_t total_bytes = 0;
     while (file.read((char*)buffer, sizeof(buffer)) || file.gcount() > 0) {
-        if (!send_packet(PKT_FILE_DATA, buffer, file.gcount())) {
+        if (!send_packet(PKT_FILE_DATA, 0, buffer, static_cast<uint16_t>(file.gcount()))) {
             LOG_ERROR << "[-] Failed to transmit file chunk." << std::endl;
             return;
         }
         total_bytes += file.gcount();
     }
 
-    send_packet(PKT_FILE_END, nullptr, 0);
+    send_packet(PKT_FILE_END, 0, nullptr, 0);
     LOG_INFO << "[+] Upload complete (" << std::dec << total_bytes << " bytes)." << std::endl;
 }
 
-void PSVR2Bridge::exec(const std::string& cmd) {
-    if (!dev) {
-        LOG_ERROR << "[-] USB device handle invalid." << std::endl;
-        return;
-    }
+struct RxThreadCtx {
+    libusb_device_handle* dev_handle;
+    std::atomic<bool>* keep_running;
+    uint32_t session_id;
+};
 
-    if (!send_packet(PKT_EXEC_CMD, (const uint8_t*)cmd.c_str(), cmd.length())) {
-        LOG_ERROR << "[-] Failed to send exec command." << std::endl;
-        return;
-    }
-
-    LOG_INFO << "[*] Executing: " << cmd << "" << std::endl;
-
-    // Open a temporary read loop to catch stdout/stderr until exit
-    uint8_t buf[4096];
-    int actual;
-    while (true) {
-        int r = libusb_bulk_transfer(dev, 0x84, buf, sizeof(buf), &actual, 1000);
-        
-        if (r == 0 && actual > 0) {
-            size_t offset = 0;
-            while (offset + sizeof(PacketHeader) <= (size_t)actual) {
-                PacketHeader* hdr = (PacketHeader*)(buf + offset);
-                
-                if (hdr->magic != PKT_MAGIC) {
-                    offset++;
-                    continue;
-                }
-                
-                if (offset + sizeof(PacketHeader) + hdr->length <= (size_t)actual) {
-                    uint8_t* payload = buf + offset + sizeof(PacketHeader);
-                    
-                    if (hdr->type == PKT_EXEC_OUT) {
-                        std::cout.write((char*)payload, hdr->length);
-                        std::cout.flush();
-                    } 
-                    else if (hdr->type == PKT_EXEC_ERR) {
-                        std::cerr.write((char*)payload, hdr->length);
-                        std::cerr.flush();
-                    } 
-                    else if (hdr->type == PKT_EXEC_EXIT) {
-                        LOG_INFO << "\n[*] Process finished." << std::endl;
-                        return;
-                    }
-                    offset += sizeof(PacketHeader) + hdr->length;
-                } else {
-                    break; // Fragmented
-                }
-            }
-        } else if (r != 0 && r != LIBUSB_ERROR_TIMEOUT) {
-            LOG_ERROR << "\n[-] USB error or timeout waiting for process output." << std::endl;
-            break;
-        }
-    }
-}
-
-static void rx_thread_mux(libusb_device_handle* dev_handle, std::atomic<bool>* keep_running) {
+static void rx_thread_mux(RxThreadCtx* ctx) {
     uint8_t buf[4096];
     int actual_length;
     
-    while (*keep_running) {
-        int r = libusb_bulk_transfer(dev_handle, 0x84, buf, sizeof(buf), &actual_length, 1000);
+    while (*ctx->keep_running) {
+        int r = libusb_bulk_transfer(ctx->dev_handle, 0x84, buf, sizeof(buf), &actual_length, 1000);
         
         if (r == 0 && actual_length > 0) {
             size_t offset = 0;
             
-            // Loop through the buffer in case multiple packets were aggregated
             while (offset + sizeof(PacketHeader) <= (size_t)actual_length) {
                 PacketHeader* hdr = (PacketHeader*)(buf + offset);
                 
-                // Re-sync if we hit corrupted data
                 if (hdr->magic != PKT_MAGIC) {
                     offset++;
                     continue;
                 }
                 
-                // Verify the whole payload arrived in this USB transfer
                 if (offset + sizeof(PacketHeader) + hdr->length <= (size_t)actual_length) {
                     uint8_t* payload = buf + offset + sizeof(PacketHeader);
                     
-                    if (hdr->type == PKT_TTY_OUT) {
+                    if (hdr->type == PKT_TTY_OUT && hdr->session_id == ctx->session_id) {
                         std::cout.write((char*)payload, hdr->length);
                         std::cout.flush(); 
+                    } else if (hdr->type == PKT_TTY_STOP && hdr->session_id == ctx->session_id) {
+                        *ctx->keep_running = false;
                     }
                     
-                    // Advance pointer to the next packet
                     offset += sizeof(PacketHeader) + hdr->length;
                 } else {
-                    // Fragmented payload (or a bad header). Break and wait for the rest.
                     break;
                 }
             }
         } else if (r != 0 && r != LIBUSB_ERROR_TIMEOUT) {
-            *keep_running = false;
+            *ctx->keep_running = false;
             break;
         }
     }
 }
 
-void PSVR2Bridge::shell(const std::string& shell_cmd) {
+void PSVR2Bridge::shell(const std::string& shell_cmd, uint32_t attach_session_id) {
     if (!dev) {
         LOG_ERROR << "[-] USB device handle invalid." << std::endl;
         return;
     }
     
-    LOG_INFO << "[*] Starting remote shell: '" << shell_cmd << "'" << std::endl;
-    if (!send_packet(PKT_TTY_START, (const uint8_t*)shell_cmd.c_str(), shell_cmd.length())) {
-        LOG_ERROR << "[-] Failed to send TTY start command." << std::endl;
-        return;
+    uint32_t current_session_id = attach_session_id;
+
+    if (current_session_id == 0) {
+        LOG_INFO << "[*] Starting remote shell: '" << shell_cmd << "'" << std::endl;
+        if (!send_packet(PKT_TTY_START, 0, (const uint8_t*)shell_cmd.c_str(), static_cast<uint16_t>(shell_cmd.length()))) {
+            LOG_ERROR << "[-] Failed to send TTY start command." << std::endl;
+            return;
+        }
+
+        uint8_t buf[4096];
+        int actual;
+        while (current_session_id == 0) {
+            int r = libusb_bulk_transfer(dev, 0x84, buf, sizeof(buf), &actual, 1000);
+            if (r == 0 && actual > 0) {
+                size_t offset = 0;
+                while (offset + sizeof(PacketHeader) <= (size_t)actual) {
+                    PacketHeader* hdr = (PacketHeader*)(buf + offset);
+                    if (hdr->magic == PKT_MAGIC && hdr->type == PKT_TTY_STARTED) {
+                        current_session_id = hdr->session_id;
+                        break;
+                    }
+                    offset += sizeof(PacketHeader) + hdr->length;
+                }
+            } else if (r != 0 && r != LIBUSB_ERROR_TIMEOUT) {
+                LOG_ERROR << "[-] Failed to get session ID." << std::endl;
+                return;
+            }
+        }
+    } else {
+        LOG_INFO << "[*] Attaching to session " << current_session_id << std::endl;
     }
 
 #ifdef _WIN32
@@ -241,18 +186,18 @@ void PSVR2Bridge::shell(const std::string& shell_cmd) {
     tcsetattr(STDIN_FILENO, TCSANOW, &raw);
 #endif
 
-    LOG_INFO << "[*] Entered headset shell session. Press Ctrl+] to exit." << std::endl;
+    LOG_INFO << "[*] Entered headset shell session " << current_session_id << ". Press Ctrl+] to detach." << std::endl;
 
     std::atomic<bool> keep_running{ true };
-    std::thread t_rx(rx_thread_mux, dev, &keep_running);
+    RxThreadCtx ctx = { dev, &keep_running, current_session_id };
+    std::thread t_rx(rx_thread_mux, &ctx);
 
     while (keep_running) {
         if (_kbhit()) {
             int c = _getch();
             if (c == 0x1D) { // Ctrl+]
-                LOG_INFO << "\n[*] Exiting shell..." << std::endl;
-                // Signal the headset to kill the shell process
-                send_packet(PKT_TTY_STOP, nullptr, 0); 
+                LOG_INFO << "\n[*] Detaching from shell..." << std::endl;
+                send_packet(PKT_TTY_STOP, current_session_id, nullptr, 0);
                 keep_running = false;
                 break;
             }
@@ -267,7 +212,7 @@ void PSVR2Bridge::shell(const std::string& shell_cmd) {
                     case 75: seq = "\x1B[D"; break; // Left
                 }
                 if (seq) {
-                    if (!send_packet(PKT_TTY_IN, (uint8_t*)seq, 3)) {
+                    if (!send_packet(PKT_TTY_IN, current_session_id, (uint8_t*)seq, 3)) {
                         keep_running = false;
                         break;
                     }
@@ -279,7 +224,7 @@ void PSVR2Bridge::shell(const std::string& shell_cmd) {
             if (c == '\b') c = 127;
             
             uint8_t out_byte = (uint8_t)c;
-            if (!send_packet(PKT_TTY_IN, &out_byte, 1)) {
+            if (!send_packet(PKT_TTY_IN, current_session_id, &out_byte, 1)) {
                 keep_running = false;
                 break;
             }
@@ -296,4 +241,42 @@ void PSVR2Bridge::shell(const std::string& shell_cmd) {
 #else
     tcsetattr(STDIN_FILENO, TCSANOW, &original_mode);
 #endif
+}
+
+void PSVR2Bridge::list_sessions() {
+    if (!dev) return;
+    
+    if (!send_packet(PKT_TTY_LIST, 0, nullptr, 0)) return;
+
+    uint8_t buf[4096];
+    int actual;
+    while (true) {
+        int r = libusb_bulk_transfer(dev, 0x84, buf, sizeof(buf), &actual, 1000);
+        if (r == 0 && actual > 0) {
+            size_t offset = 0;
+            while (offset + sizeof(PacketHeader) <= (size_t)actual) {
+                PacketHeader* hdr = (PacketHeader*)(buf + offset);
+                if (hdr->magic == PKT_MAGIC) {
+                    if (hdr->type == PKT_TTY_LIST_RESP) {
+                        uint8_t* payload = buf + offset + sizeof(PacketHeader);
+                        std::cout << "\nActive Sessions:\n";
+                        std::cout.write((char*)payload, hdr->length);
+                        std::cout.flush();
+                        return;
+                    }
+                    offset += sizeof(PacketHeader) + hdr->length;
+                } else {
+                    offset++;
+                }
+            }
+        } else if (r != 0 && r != LIBUSB_ERROR_TIMEOUT) {
+            break;
+        }
+    }
+}
+
+void PSVR2Bridge::kill_session(uint32_t session_id) {
+    if (!dev) return;
+    send_packet(PKT_TTY_STOP, session_id, nullptr, 0);
+    LOG_INFO << "[*] Sent kill signal to session " << session_id << "\n";
 }

