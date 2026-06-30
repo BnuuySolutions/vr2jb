@@ -28,6 +28,9 @@ int main(int argc, char* argv[]) {
 
     LOG_INFO << "[1/3] Connecting to PSVR2...\n";
     if (!usb.connect()) {
+        if (usb.has_firmware_mismatch()) {
+            return 1;
+        }
         LOG_ERROR << "[-] Device not found. Check USB.\n";
         return 1;
     }
@@ -57,6 +60,9 @@ int main(int argc, char* argv[]) {
         }
 
         if (!connected) {
+            if (usb.has_firmware_mismatch()) {
+                return 1;
+            }
             LOG_ERROR << "[-] Unable to reconnect to HMD. Check your USB connections.\n";
         }
     }

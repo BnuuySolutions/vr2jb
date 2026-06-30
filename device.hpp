@@ -34,6 +34,8 @@ public:
     
     libusb_device_handle* get_handle() const { return dev_handle; }
     int raw_ctrl(uint8_t bmRequestType, uint8_t bRequest, uint16_t wValue, uint16_t wIndex, std::vector<uint8_t>& data, int timeout = 500);
+    
+    bool has_firmware_mismatch() const { return firmware_mismatch; }
 private:
     libusb_context* ctx;
     libusb_device_handle* dev_handle;
@@ -42,6 +44,8 @@ private:
     
     std::thread recv_thread_handle;
     std::atomic<bool> running;
+
+    bool firmware_mismatch = false;
 
     void recv_thread();
 };

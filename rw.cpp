@@ -19,38 +19,29 @@ bool KernelRW::setup_read() {
     if (_sauth_off) return true;
 
     const std::vector<uint8_t> sauth_marker = {0x1A, 0xCB, 0x0A, 0xFC, 0xBF, 0xFF, 0xFF, 0xFF};
-    int max_retries = 4;
 
-    for (int attempt = 0; attempt < max_retries; attempt++) {
-        std::vector<uint8_t> heap = usb->hid_get(0xF2, 0, 0x1000);
+    std::vector<uint8_t> heap = usb->hid_get(0xF2, 0, 0x1000);
 
-        if (heap.size() < 0x400) continue;
+    if (heap.size() < 0x800) return false;
 
-        auto it = std::search(heap.begin(), heap.end(), sauth_marker.begin(), sauth_marker.end());
-        size_t found_off = -1;
-        
-        if (it != heap.end()) {
-            found_off = std::distance(heap.begin(), it);
-        }
-
-        if (found_off < 0) {
-            std::vector<uint8_t> poke(64, 0);
-            poke[0] = 0xF0; poke[1] = 0x01;
-            usb->hid_set(0xFF, 0xFF, poke);
-            usb->hid_get(0xF1, 0, 64);
-            std::this_thread::sleep_for(std::chrono::milliseconds(100));
-            continue;
-        }
-
-        _sauth_off = found_off;
-        forge_desc_off = found_off + constants::DESC_PTR_OFFSET;
-        cached_heap = heap;
-
-        forge_desc_val = constants::u64(heap.data() + forge_desc_off);
-        
-        return true;
+    auto it = std::search(heap.begin(), heap.end(), sauth_marker.begin(), sauth_marker.end());
+    size_t found_off = -1;
+    
+    if (it != heap.end()) {
+        found_off = std::distance(heap.begin(), it);
     }
-    return false;
+
+    if (found_off < 0) {
+        return false;
+    }
+
+    _sauth_off = found_off;
+    forge_desc_off = found_off + constants::DESC_PTR_OFFSET;
+    cached_heap = heap;
+
+    forge_desc_val = constants::u64(heap.data() + forge_desc_off);
+    
+    return true;
 }
 
 uint64_t KernelRW::retrieve_get_alt() {

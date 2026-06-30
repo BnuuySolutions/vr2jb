@@ -1,8 +1,25 @@
 #include "device.hpp"
+#include "logger.hpp"
+#include <iomanip>
+#include <sstream>
 
 #ifdef _WIN32
 #include <windows.h>
 #endif
+
+#pragma pack(push, 1)
+struct FirmwareInfo {
+    uint32_t Version;
+    uint32_t Reserved0;
+    char CommitHash[40];
+    uint32_t Unknown0;
+    uint32_t Unknown1;
+    char PcbId[16];
+    uint32_t Unknown2;
+    uint32_t Reserved1;
+    uint32_t RecoveryVersion;
+};
+#pragma pack(pop)
 
 PSVR2Device::PSVR2Device() : ctx(nullptr), dev_handle(nullptr), running(false) {
     libusb_init(&ctx);
@@ -51,6 +68,43 @@ bool PSVR2Device::connect() {
     // Explicitly claim the primary bulk interface
     libusb_claim_interface(dev_handle, CTRL_INTERFACE);
     libusb_claim_interface(dev_handle, BRIDGE_INTERFACE);
+
+    firmware_mismatch = false;
+
+    // Check firmware version
+    uint32_t version = 0;
+    while (version == 0) {
+        std::vector<uint8_t> info_buffer(8 + sizeof(FirmwareInfo), 0);
+        int ctrl_res = raw_ctrl(0xC2, 0x01, 0x81, CTRL_INTERFACE, info_buffer, 1000);
+        if (ctrl_res < 0) {
+            libusb_release_interface(dev_handle, CTRL_INTERFACE);
+            libusb_release_interface(dev_handle, BRIDGE_INTERFACE);
+            libusb_close(dev_handle);
+            dev_handle = nullptr;
+            return false;
+        }
+        if (ctrl_res >= static_cast<int>(8 + sizeof(FirmwareInfo))) {
+            FirmwareInfo* fw_info = reinterpret_cast<FirmwareInfo*>(&info_buffer[8]);
+            version = fw_info->Version;
+        }
+        if (version == 0) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(250));
+        }
+    }
+
+    if (version != 0x06000102) {
+        firmware_mismatch = true;
+        std::ostringstream oss_ver;
+        oss_ver << "0x" << std::hex << std::uppercase << std::setw(8) << std::setfill('0') << version;
+        std::string action = (version > 0x06000102) ? "downgrade" : "upgrade";
+        LOG_ERROR << "You are on version " << oss_ver.str() << ", please " << action << " to 0x06000102 (v06.00) to use vr2jb\n";
+
+        libusb_release_interface(dev_handle, CTRL_INTERFACE);
+        libusb_release_interface(dev_handle, BRIDGE_INTERFACE);
+        libusb_close(dev_handle);
+        dev_handle = nullptr;
+        return false;
+    }
 
     running = true;
 
