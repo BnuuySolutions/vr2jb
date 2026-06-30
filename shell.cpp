@@ -47,6 +47,7 @@ void PSVR2Shell::execute_command(const std::vector<std::string>& args) {
     else if (cmd == "reboot") do_reboot(cmd_args);
     else if (cmd == "shell") do_shell(cmd_args);
     else if (cmd == "upload") do_upload(cmd_args);
+    else if (cmd == "download") do_download(cmd_args);
     else if (cmd == "sessions") bridge->list_sessions();
     else if (cmd == "attach") do_attach(cmd_args);
     else if (cmd == "kill") do_kill(cmd_args);
@@ -113,6 +114,15 @@ void PSVR2Shell::do_upload(const std::vector<std::string>& args) {
     }
     
     bridge->upload(args[0], args[1]);
+}
+
+void PSVR2Shell::do_download(const std::vector<std::string>& args) {
+    if (args.size() != 2) {
+        LOG_ERROR << "Usage: download <remote_path> <local_path>\n";
+        return;
+    }
+    
+    bridge->download(args[0], args[1]);
 }
 
 void PSVR2Shell::do_shell(const std::vector<std::string>& args) {

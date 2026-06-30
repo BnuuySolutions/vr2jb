@@ -9,6 +9,7 @@
 #include <cstring>
 #include <chrono>
 #include <vector>
+#include <cstdio>
 
 #ifdef _WIN32
 #include <windows.h>
@@ -83,6 +84,115 @@ void PSVR2Bridge::upload(const std::string& local_path, const std::string& remot
     send_packet(PKT_FILE_END, 0, nullptr, 0);
     LOG_INFO << "[+] Upload complete (" << std::dec << total_bytes << " bytes)." << std::endl;
 }
+
+void PSVR2Bridge::download(const std::string& remote_path, const std::string& local_path) {
+    if (!dev) {
+        LOG_ERROR << "[-] USB device handle invalid." << std::endl;
+        return;
+    }
+
+    std::ofstream file(local_path, std::ios::binary);
+    if (!file) {
+        LOG_ERROR << "[-] Failed to open local file '" << local_path << "' for writing." << std::endl;
+        return;
+    }
+
+    LOG_INFO << "[*] Requesting download of '" << remote_path << "'..." << std::endl;
+
+    if (!send_packet(PKT_DOWNLOAD_REQ, 0, (const uint8_t*)remote_path.c_str(), static_cast<uint16_t>(remote_path.length()))) {
+        LOG_ERROR << "[-] Failed to send download request." << std::endl;
+        return;
+    }
+
+    uint8_t rx_buf[4096];
+    int actual_length;
+    bool transmission_started = false;
+    bool transmission_ended = false;
+    size_t total_bytes = 0;
+    std::vector<uint8_t> stream_buf;
+
+    int timeouts = 0;
+    while (!transmission_ended) {
+        int r = libusb_bulk_transfer(dev, 0x84, rx_buf, sizeof(rx_buf), &actual_length, 2000);
+        if (r == 0) {
+            if (actual_length > 0) {
+                timeouts = 0; // Reset timeout counter on successful read
+                stream_buf.insert(stream_buf.end(), rx_buf, rx_buf + actual_length);
+                
+                size_t offset = 0;
+                bool consumed_any = true;
+                while (consumed_any && offset < stream_buf.size()) {
+                    consumed_any = false;
+                    
+                    if (stream_buf[offset] != PKT_MAGIC) {
+                        offset++;
+                        consumed_any = true;
+                        continue;
+                    }
+
+                    if (offset + sizeof(PacketHeader) <= stream_buf.size()) {
+                        PacketHeader* hdr = (PacketHeader*)(stream_buf.data() + offset);
+                        
+                        if (offset + sizeof(PacketHeader) + hdr->length <= stream_buf.size()) {
+                            uint8_t* payload = stream_buf.data() + offset + sizeof(PacketHeader);
+                            
+                            if (hdr->type == PKT_FILE_START) {
+                                LOG_INFO << "[*] Download started." << std::endl;
+                                transmission_started = true;
+                            } else if (hdr->type == PKT_FILE_DATA) {
+                                if (!transmission_started) {
+                                    LOG_WARN << "[!] Received file data before start packet." << std::endl;
+                                    transmission_started = true;
+                                }
+                                file.write((char*)payload, hdr->length);
+                                total_bytes += hdr->length;
+                            } else if (hdr->type == PKT_FILE_END) {
+                                LOG_INFO << "[+] Download complete (" << std::dec << total_bytes << " bytes)." << std::endl;
+                                transmission_ended = true;
+                            } else if (hdr->type == PKT_FILE_ERR) {
+                                std::string err_msg((char*)payload, hdr->length);
+                                LOG_ERROR << "[-] Remote error: " << err_msg << std::endl;
+                                transmission_ended = true;
+                                file.close();
+                                std::remove(local_path.c_str());
+                            }
+                            
+                            offset += sizeof(PacketHeader) + hdr->length;
+                            consumed_any = true;
+                        }
+                    }
+                }
+                
+                if (offset > 0) {
+                    stream_buf.erase(stream_buf.begin(), stream_buf.begin() + offset);
+                }
+            } else {
+                // actual_length == 0 (ZLP), just continue reading
+                continue;
+            }
+        } else if (r == LIBUSB_ERROR_TIMEOUT) {
+            if (!transmission_started) {
+                LOG_ERROR << "[-] Timeout waiting for download response." << std::endl;
+                break;
+            }
+            timeouts++;
+            if (timeouts > 5) {
+                LOG_ERROR << "[-] Download timed out (no activity for 10 seconds)." << std::endl;
+                break;
+            }
+        } else {
+            LOG_ERROR << "[-] USB transfer error: " << r << std::endl;
+            break;
+        }
+    }
+
+    if (!transmission_ended) {
+        LOG_ERROR << "[-] Download failed or interrupted." << std::endl;
+        file.close();
+        std::remove(local_path.c_str());
+    }
+}
+
 
 struct RxThreadCtx {
     libusb_device_handle* dev_handle;

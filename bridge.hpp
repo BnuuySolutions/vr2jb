@@ -8,6 +8,7 @@ public:
     PSVR2Bridge(libusb_device_handle* dev_handle);
 
     void upload(const std::string& local_path, const std::string& remote_path);
+    void download(const std::string& remote_path, const std::string& local_path);
     void shell(const std::string& shell_cmd, uint32_t attach_session_id = 0);
     void list_sessions();
     void kill_session(uint32_t session_id);

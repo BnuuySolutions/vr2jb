@@ -30,6 +30,7 @@ private:
     // Integration Commands
     void do_shell(const std::vector<std::string>& args);
     void do_upload(const std::vector<std::string>& args);
+    void do_download(const std::vector<std::string>& args);
     void do_attach(const std::vector<std::string>& args);
     void do_kill(const std::vector<std::string>& args);
 };
