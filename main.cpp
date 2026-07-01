@@ -4,7 +4,6 @@
 #include "bridge.hpp"
 #include "logger.hpp"
 
-#include <iostream>
 #include <thread>
 #include <vector>
 #include <string>
@@ -70,7 +69,7 @@ int main(int argc, char* argv[]) {
     LOG_INFO << "[3/3] Setting up write...\n";
     
     if (!krw.setup_write()) {
-        LOG_WARN << "[!] Write unavailable — rebooting.\n";
+        LOG_WARN << "[!] Write unavailable - rebooting.\n";
         usb.force_reboot();
         return 1;
     }

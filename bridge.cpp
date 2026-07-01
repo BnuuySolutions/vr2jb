@@ -1,5 +1,6 @@
 #include "bridge.hpp"
 #include "logger.hpp"
+
 #include "./vr2bridge/bridge_protocol.hpp"
 
 #include <iostream>
