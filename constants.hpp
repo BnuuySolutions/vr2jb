@@ -23,8 +23,9 @@ namespace constants {
 
     constexpr uint64_t CLEAN_RETURN = 0xFFFFFFC000305778;
 
-    constexpr uint64_t SAUTH_SIEUSB = 0xFFFFFFBFFC0Af188;
+    constexpr uint64_t SAUTH_SIEUSB = 0xFFFFFFBFFC0AF188;
     constexpr uint64_t REPORT_0xFF = 0xFFFFFFBFFC0CFFE8;
+    constexpr uint64_t DESC_EXPECTED_VALUE = 0xFFFFFFBFFC0AE398;
 
     constexpr uint64_t INJECT_BASE = 0xFFFFFFC00036EDF0;
     constexpr uint64_t TEXT_STR_SC = INJECT_BASE;

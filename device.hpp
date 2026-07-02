@@ -22,9 +22,6 @@ public:
 
     bool connect();
     bool reconnect(int retries = 10);
-    
-    void send_keep_alive();
-    void check_keep_alive();
 
     std::vector<uint8_t> hid_get(uint8_t report_id, uint8_t sub_id, uint16_t length);
     int hid_set(uint8_t report_id, uint8_t sub_id, const std::vector<uint8_t>& data);

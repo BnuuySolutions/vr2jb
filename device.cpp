@@ -108,7 +108,6 @@ bool PSVR2Device::connect() {
 
     running = true;
 
-    send_keep_alive();
     return true;
 }
 
@@ -118,19 +117,6 @@ bool PSVR2Device::reconnect(int retries) {
         std::this_thread::sleep_for(std::chrono::seconds(1));
     }
     return false;
-}
-
-void PSVR2Device::send_keep_alive() {
-    if (!dev_handle) return;
-    last_keep_alive = std::chrono::steady_clock::now();
-    // Implementation omitted in Python wrapper, kept structure
-}
-
-void PSVR2Device::check_keep_alive() {
-    auto now = std::chrono::steady_clock::now();
-    if (std::chrono::duration_cast<std::chrono::seconds>(now - last_keep_alive).count() > KEEP_ALIVE_INTERVAL) {
-        send_keep_alive();
-    }
 }
 
 std::vector<uint8_t> PSVR2Device::hid_get(uint8_t report_id, uint8_t sub_id, uint16_t length) {
