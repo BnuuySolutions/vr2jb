@@ -101,7 +101,9 @@ int main(int argc, char* argv[]) {
         if (!command_args.empty()) {
             shell.execute_command(command_args);
         } else {
-            LOG_ERROR << "[-] No command specified. Use -i for interactive mode.\n";
+            LOG_ERROR << "[-] No command specified. Applying jailbreak patches.\n";
+            shell.execute_command({"upload", "./patcher", "/tmp/patcher"});
+            shell.execute_command({"shell", "/tmp/patcher"});
         }
     }
 
