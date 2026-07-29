@@ -1,8 +1,9 @@
+#include "bridge.hpp"
 #include "device.hpp"
+#include "downgrade.hpp"
+#include "logger.hpp"
 #include "rw.hpp"
 #include "shell.hpp"
-#include "bridge.hpp"
-#include "logger.hpp"
 
 #include <thread>
 #include <vector>
@@ -24,6 +25,12 @@ int main(int argc, char* argv[]) {
     }
 
     PSVR2Device usb;
+
+    if (command_args.size() > 0 && command_args[0] == "downgrade") {
+        usb.connect(true);
+        do_downgrade(usb);
+        return 0;
+    }
 
     LOG_INFO << "[1/3] Connecting to PSVR2...\n";
     if (!usb.connect()) {

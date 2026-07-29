@@ -37,7 +37,8 @@ add_executable(vr2jb
     rw.cpp
     logger.cpp
     bridge.cpp
-    shell.cpp)
+    shell.cpp
+    downgrade.cpp)
 
 target_include_directories(vr2jb PUBLIC ${LIBUSB_INCLUDE_DIRS})
 target_link_libraries(vr2jb PUBLIC PkgConfig::libusb)

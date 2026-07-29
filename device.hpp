@@ -20,7 +20,7 @@ public:
     bool force_reboot();
     uint64_t retrieve_get_alt();
 
-    bool connect();
+    bool connect(bool ignore_version = false);
     bool reconnect(int retries = 10);
 
     std::vector<uint8_t> hid_get(uint8_t report_id, uint8_t sub_id, uint16_t length);

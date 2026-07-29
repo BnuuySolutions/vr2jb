@@ -47,7 +47,7 @@ int PSVR2Device::raw_ctrl(uint8_t bmRequestType, uint8_t bRequest, uint16_t wVal
     return libusb_control_transfer(dev_handle, bmRequestType, bRequest, wValue, wIndex, data.data(), wLength, timeout);
 }
 
-bool PSVR2Device::connect() {
+bool PSVR2Device::connect(bool ignore_version) {
     dev_handle = libusb_open_device_with_vid_pid(ctx, VID, PID);
     if (!dev_handle) return false;
 
@@ -73,7 +73,7 @@ bool PSVR2Device::connect() {
 
     // Check firmware version
     uint32_t version = 0;
-    while (version == 0) {
+    while (version == 0 && !ignore_version) {
         std::vector<uint8_t> info_buffer(8 + sizeof(FirmwareInfo), 0);
         int ctrl_res = raw_ctrl(0xC2, 0x01, 0x81, CTRL_INTERFACE, info_buffer, 1000);
         if (ctrl_res < 0) {
@@ -92,12 +92,22 @@ bool PSVR2Device::connect() {
         }
     }
 
-    if (version != 0x06000102) {
+    if (version != 0x06000102 && !ignore_version) {
         firmware_mismatch = true;
         std::ostringstream oss_ver;
         oss_ver << "0x" << std::hex << std::uppercase << std::setw(8) << std::setfill('0') << version;
         std::string action = (version > 0x06000102) ? "downgrade" : "upgrade";
-        LOG_ERROR << "You are on version " << oss_ver.str() << ", please " << action << " to 0x06000102 (v06.00) to use vr2jb\n";
+        LOG_ERROR << "Your headset is on firmware version " << oss_ver.str() << ", please " << action << " to 0x06000102 (v06.00) to use vr2jb." << std::endl;
+        if (version > 0x06000102) {
+#ifdef _WIN32
+            const char* command = ".\\vr2jb.exe";
+#else
+            const char* command = "./vr2jb";
+#endif
+            LOG_ERROR << "Try running '" << command << " downgrade' to start downgrading." << std::endl;
+        } else {
+            LOG_ERROR << "Use PSVR2Updater to upgrade to firmware v06.00." << std::endl;
+        }
 
         libusb_release_interface(dev_handle, CTRL_INTERFACE);
         libusb_release_interface(dev_handle, BRIDGE_INTERFACE);
@@ -113,8 +123,8 @@ bool PSVR2Device::connect() {
 
 bool PSVR2Device::reconnect(int retries) {
     for (int i = 0; i < retries; i++) {
-        if (connect()) return true;
-        std::this_thread::sleep_for(std::chrono::seconds(1));
+        if (connect(true)) return true;
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
     }
     return false;
 }
