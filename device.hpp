@@ -24,7 +24,7 @@ public:
     bool reconnect(int retries = 10);
 
     std::vector<uint8_t> hid_get(uint8_t report_id, uint8_t sub_id, uint16_t length);
-    int hid_set(uint8_t report_id, uint8_t sub_id, const std::vector<uint8_t>& data);
+    int hid_set(uint8_t report_id, uint8_t sub_id, const std::vector<uint8_t>& data, int timeout = 2500);
     bool vendor_set(uint8_t report_id, uint16_t subcmd, const std::vector<uint8_t>& data = {}, int timeout = 1000);
     std::vector<uint8_t> get_config_desc(uint16_t length = 9);
     bool trigger_get_alt();

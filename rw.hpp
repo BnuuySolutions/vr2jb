@@ -24,7 +24,9 @@ public:
 
     std::vector<uint8_t> read(uint64_t addr, size_t length);
     uint64_t read_ptr(uint64_t addr);
-    
+
+    bool direct_exchange(uint64_t target, uint64_t helper, uint8_t* out, size_t length);
+    bool direct_read_raw(uint64_t address, uint8_t* out, size_t length);
 
     bool write_byte(uint64_t addr, uint8_t val);
     bool write_u64_slow(uint64_t addr, uint64_t val);
@@ -43,15 +45,10 @@ public:
 private:
     PSVR2Device* usb;
     
+    uint64_t request_buffer = 0;
     uint64_t sauth = 0;
-    uint64_t _sauth_off = 0;
-    uint64_t forge_desc_off = 0;
-    uint64_t forge_desc_val = 0;
     
-    std::vector<uint8_t> cached_heap {};
     Registers cached_registers {};
     uint64_t rwx_base = 0;
-    std::vector<uint8_t> _read_raw(uint64_t addr, size_t length);
-    std::vector<uint8_t> _read_raw_rop(uint64_t addr, size_t length);
     std::vector<uint8_t> _trigger_overflow(const std::vector<uint8_t>& payload);
 };

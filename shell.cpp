@@ -69,7 +69,7 @@ void PSVR2Shell::do_get(const std::vector<std::string>& args) {
     std::ofstream file(fname, std::ios::binary);
     size_t done = 0;
     while (done < size) {
-        size_t cl = std::min((size_t)4096, size - done);
+        size_t cl = std::min((size_t)0x1000, size - done);
         auto data = krw->read(addr + done, cl);
         if (data.empty()) {
             LOG_ERROR << " [FAIL]\n";

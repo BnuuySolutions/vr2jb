@@ -105,7 +105,7 @@ void PSVR2Bridge::download(const std::string& remote_path, const std::string& lo
         return;
     }
 
-    uint8_t rx_buf[4096];
+    uint8_t rx_buf[0x1000];
     int actual_length;
     bool transmission_started = false;
     bool transmission_ended = false;
@@ -202,7 +202,7 @@ struct RxThreadCtx {
 };
 
 static void rx_thread_mux(RxThreadCtx* ctx) {
-    uint8_t buf[4096];
+    uint8_t buf[0x1000];
     int actual_length;
     
     while (*ctx->keep_running) {
@@ -256,7 +256,7 @@ void PSVR2Bridge::shell(const std::string& shell_cmd, uint32_t attach_session_id
             return;
         }
 
-        uint8_t buf[4096];
+        uint8_t buf[0x1000];
         int actual;
         while (current_session_id == 0) {
             int r = libusb_bulk_transfer(dev, 0x84, buf, sizeof(buf), &actual, 1000);
@@ -359,7 +359,7 @@ void PSVR2Bridge::list_sessions() {
     
     if (!send_packet(PKT_TTY_LIST, 0, nullptr, 0)) return;
 
-    uint8_t buf[4096];
+    uint8_t buf[0x1000];
     int actual;
     while (true) {
         int r = libusb_bulk_transfer(dev, 0x84, buf, sizeof(buf), &actual, 1000);

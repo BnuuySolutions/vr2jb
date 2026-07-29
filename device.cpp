@@ -138,10 +138,10 @@ std::vector<uint8_t> PSVR2Device::hid_get(uint8_t report_id, uint8_t sub_id, uin
     return data;
 }
 
-int PSVR2Device::hid_set(uint8_t report_id, uint8_t sub_id, const std::vector<uint8_t>& data_in) {
+int PSVR2Device::hid_set(uint8_t report_id, uint8_t sub_id, const std::vector<uint8_t>& data_in, int timeout) {
     std::vector<uint8_t> data = data_in; 
     
-    return raw_ctrl(0x21, 0x09, (sub_id << 8) | report_id, CTRL_INTERFACE, data);
+    return raw_ctrl(0x21, 0x09, (sub_id << 8) | report_id, CTRL_INTERFACE, data, timeout);
 }
 
 bool PSVR2Device::vendor_set(uint8_t report_id, uint16_t subcmd, const std::vector<uint8_t>& data, int timeout) {
