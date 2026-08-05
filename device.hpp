@@ -22,6 +22,7 @@ public:
 
     bool connect(bool ignore_version = false);
     bool reconnect(int retries = 10);
+    void disconnect();
 
     std::vector<uint8_t> hid_get(uint8_t report_id, uint8_t sub_id, uint16_t length);
     int hid_set(uint8_t report_id, uint8_t sub_id, const std::vector<uint8_t>& data, int timeout = 2500);
@@ -38,11 +39,6 @@ private:
     libusb_device_handle* dev_handle;
     
     std::chrono::steady_clock::time_point last_keep_alive;
-    
-    std::thread recv_thread_handle;
-    std::atomic<bool> running;
 
     bool firmware_mismatch = false;
-
-    void recv_thread();
 };

@@ -21,15 +21,11 @@ struct FirmwareInfo {
 };
 #pragma pack(pop)
 
-PSVR2Device::PSVR2Device() : ctx(nullptr), dev_handle(nullptr), running(false) {
+PSVR2Device::PSVR2Device() : ctx(nullptr), dev_handle(nullptr) {
     libusb_init(&ctx);
 }
 
 PSVR2Device::~PSVR2Device() {
-    running = false;
-    if (recv_thread_handle.joinable()) {
-        recv_thread_handle.join();
-    }
     if (dev_handle) {
         libusb_release_interface(dev_handle, CTRL_INTERFACE);
         libusb_close(dev_handle);
@@ -48,6 +44,8 @@ int PSVR2Device::raw_ctrl(uint8_t bmRequestType, uint8_t bRequest, uint16_t wVal
 }
 
 bool PSVR2Device::connect(bool ignore_version) {
+    disconnect();
+
     dev_handle = libusb_open_device_with_vid_pid(ctx, VID, PID);
     if (!dev_handle) return false;
 
@@ -116,8 +114,6 @@ bool PSVR2Device::connect(bool ignore_version) {
         return false;
     }
 
-    running = true;
-
     return true;
 }
 
@@ -127,6 +123,15 @@ bool PSVR2Device::reconnect(int retries) {
         std::this_thread::sleep_for(std::chrono::milliseconds(100));
     }
     return false;
+}
+
+void PSVR2Device::disconnect() {
+    if (dev_handle) {
+        libusb_release_interface(dev_handle, CTRL_INTERFACE);
+        libusb_release_interface(dev_handle, BRIDGE_INTERFACE);
+        libusb_close(dev_handle);
+        dev_handle = nullptr;
+    }
 }
 
 std::vector<uint8_t> PSVR2Device::hid_get(uint8_t report_id, uint8_t sub_id, uint16_t length) {

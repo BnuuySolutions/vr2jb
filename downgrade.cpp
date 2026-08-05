@@ -39,7 +39,7 @@ static uint16_t hmd2_dummy_set(PSVR2Device& usb) {
     data.reserve(sizeof(auth1_data));
     data.insert(data.end(), (uint8_t*)&auth1_data, (uint8_t*)&auth1_data + sizeof(auth1_data));
 
-    return usb.hid_set(REPORT_ID_SET_AUTH1_DATA, SUB_ID_H_CHALLENGE_1, data);
+    return usb.hid_set(REPORT_ID_SET_AUTH1_DATA, SUB_ID_H_CHALLENGE_1, data, 250);
 }
 
 static uint16_t hmd2_overflow_val(PSVR2Device& usb, uint8_t val) {
@@ -57,7 +57,7 @@ static uint16_t hmd2_overflow_val(PSVR2Device& usb, uint8_t val) {
     data.reserve(sizeof(auth1_data_overflow));
     data.insert(data.end(), (uint8_t*)&auth1_data_overflow, (uint8_t*)&auth1_data_overflow + sizeof(auth1_data_overflow));
 
-    return usb.hid_set(REPORT_ID_SET_AUTH1_DATA, SUB_ID_H_CHALLENGE_1, data);
+    return usb.hid_set(REPORT_ID_SET_AUTH1_DATA, SUB_ID_H_CHALLENGE_1, data, 250);
 }
 
 void do_downgrade(PSVR2Device& usb) {
@@ -70,7 +70,7 @@ void do_downgrade(PSVR2Device& usb) {
     LOG_INFO << "Instructions:\n";
     LOG_INFO << "1.) Wait until you see \"Successfully crashed PS VR2\", if you do "
              << "not get this message, your PS VR2 may be incompatible currently.\n";
-    LOG_INFO << "2.) Upon getting that message, quickly (within 10-15s) disconnect "
+    LOG_INFO << "2.) Upon getting that message, quickly (within 1-2 seconds) disconnect "
              << "your PS VR2 (unplug from adapter or unplug USB-C, DO NOT HOLD POWER BUTTON).\n";
     LOG_INFO << "3.) Plug your PS VR2 back in, and press the power button. If "
              << "everything goes correctly, the PS VR2 should get crashed immediately again on boot.\n";
