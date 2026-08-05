@@ -104,6 +104,10 @@ int main(int argc, char* argv[]) {
             LOG_ERROR << "[-] No command specified. Applying jailbreak patches.\n";
             shell.execute_command({"upload", "./patcher", "/tmp/patcher"});
             shell.execute_command({"shell", "/tmp/patcher"});
+            shell.execute_command({"shell", "echo", "\"pwmLEDx 2 2 0 3 0 0 0 0 0 0 0 100 1800 0 200 0 0\"", ">", "/sys/devices/platform/soc/10010000.pwrap/10010000.pwrap:mt3615/mtk_pwm_intf/pwm_manus"});
+
+            LOG_ERROR << "[*] Jailbreak patch commands sent. Make sure the output above was successful.\n";
+            std::this_thread::sleep_for(std::chrono::seconds(8));
         }
     }
 
