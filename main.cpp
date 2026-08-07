@@ -12,6 +12,7 @@
 
 int main(int argc, char* argv[]) {
     bool interactive = false;
+    bool skip_wait = false;
     std::vector<std::string> command_args;
     
     for (int i = 1; i < argc; ++i) {
@@ -20,6 +21,8 @@ int main(int argc, char* argv[]) {
             interactive = true;
         } else if (arg == "-v") {
             Logger::set_level(LogLevel::L_DEBUG);
+        } else if (arg == "-s") {
+            skip_wait = true;
         } else {
             command_args.push_back(arg);
         }
@@ -110,7 +113,10 @@ int main(int argc, char* argv[]) {
             usb.disconnect();
 
             LOG_ERROR << "[*] Jailbreak patch commands sent. Make sure the output above was successful.\n";
-            std::this_thread::sleep_for(std::chrono::seconds(8));
+            
+            if (!skip_wait) {
+                std::this_thread::sleep_for(std::chrono::seconds(8));
+            }
         }
     }
 
