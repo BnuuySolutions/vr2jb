@@ -2,13 +2,9 @@
 
 LogLevel Logger::current_level = LogLevel::L_INFO;
 
-void Logger::set_level(LogLevel level) {
-    current_level = level;
-}
+void Logger::set_level(LogLevel level) { current_level = level; }
 
-LogLevel Logger::get_level() {
-    return current_level;
-}
+LogLevel Logger::get_level() { return current_level; }
 
 LogMessage::LogMessage(LogLevel level) : level(level) {}
 

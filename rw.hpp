@@ -1,9 +1,10 @@
 #pragma once
 
-#include "device.hpp"
-
 #include <string>
 #include <vector>
+
+#include "device.hpp"
+
 
 struct Registers {
     uint64_t req = 0;
@@ -12,9 +13,9 @@ struct Registers {
 };
 
 class KernelRW {
-public:
+   public:
     KernelRW(PSVR2Device* device) : usb(device) {}
-    
+
     bool setup_read();
     uint64_t retrieve_get_alt();
     void repair_descriptor();
@@ -42,13 +43,14 @@ public:
     bool execute_elf(const std::string& target_path, const std::vector<std::string>& args);
     bool fast_mass_patch_pte(uint64_t vmalloc_base, size_t total_size);
     bool patch_rwx(uint64_t vaddr, size_t total_size);
-private:
+
+   private:
     PSVR2Device* usb;
-    
+
     uint64_t request_buffer = 0;
     uint64_t sauth = 0;
-    
-    Registers cached_registers {};
+
+    Registers cached_registers{};
     uint64_t rwx_base = 0;
     std::vector<uint8_t> _trigger_overflow(const std::vector<uint8_t>& payload);
 };

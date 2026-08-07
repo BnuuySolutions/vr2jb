@@ -1,7 +1,10 @@
 #include "device.hpp"
-#include "logger.hpp"
+
 #include <iomanip>
 #include <sstream>
+#include <thread>
+
+#include "logger.hpp"
 
 #ifdef _WIN32
 #include <windows.h>
@@ -21,9 +24,7 @@ struct FirmwareInfo {
 };
 #pragma pack(pop)
 
-PSVR2Device::PSVR2Device() : ctx(nullptr), dev_handle(nullptr) {
-    libusb_init(&ctx);
-}
+PSVR2Device::PSVR2Device() : ctx(nullptr), dev_handle(nullptr) { libusb_init(&ctx); }
 
 PSVR2Device::~PSVR2Device() {
     if (dev_handle) {
@@ -136,7 +137,7 @@ void PSVR2Device::disconnect() {
 
 std::vector<uint8_t> PSVR2Device::hid_get(uint8_t report_id, uint8_t sub_id, uint16_t length) {
     std::vector<uint8_t> data(length, 0);
-    
+
     int res = raw_ctrl(0xA1, 0x01, (sub_id << 8) | report_id, CTRL_INTERFACE, data);
     if (res < 0) return {};
     data.resize(res);
@@ -144,8 +145,8 @@ std::vector<uint8_t> PSVR2Device::hid_get(uint8_t report_id, uint8_t sub_id, uin
 }
 
 int PSVR2Device::hid_set(uint8_t report_id, uint8_t sub_id, const std::vector<uint8_t>& data_in, int timeout) {
-    std::vector<uint8_t> data = data_in; 
-    
+    std::vector<uint8_t> data = data_in;
+
     return raw_ctrl(0x21, 0x09, (sub_id << 8) | report_id, CTRL_INTERFACE, data, timeout);
 }
 
@@ -163,7 +164,7 @@ bool PSVR2Device::vendor_set(uint8_t report_id, uint16_t subcmd, const std::vect
     buf.insert(buf.end(), data.begin(), data.end());
 
     int res = raw_ctrl(0x42, 0x09, 0, CTRL_INTERFACE, buf, timeout);
-    
+
     return res >= 0;
 }
 
@@ -177,17 +178,9 @@ std::vector<uint8_t> PSVR2Device::get_config_desc(uint16_t length) {
 
 bool PSVR2Device::trigger_get_alt() {
     uint8_t buffer[1] = {0};
-    int res = libusb_control_transfer(
-        dev_handle, 
-        LIBUSB_ENDPOINT_IN | LIBUSB_REQUEST_TYPE_STANDARD | LIBUSB_RECIPIENT_INTERFACE, 
-        LIBUSB_REQUEST_GET_INTERFACE, 
-        0,
-        CTRL_INTERFACE,
-        buffer, 
-        sizeof(buffer), 
-        1000
-    );
-    return res >= 0; 
+    int res = libusb_control_transfer(dev_handle, LIBUSB_ENDPOINT_IN | LIBUSB_REQUEST_TYPE_STANDARD | LIBUSB_RECIPIENT_INTERFACE, LIBUSB_REQUEST_GET_INTERFACE, 0, CTRL_INTERFACE, buffer,
+                                      sizeof(buffer), 1000);
+    return res >= 0;
 }
 
 bool PSVR2Device::force_reboot() {

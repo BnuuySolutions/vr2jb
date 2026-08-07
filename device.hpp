@@ -1,13 +1,13 @@
 #pragma once
 
 #include <libusb.h>
-#include <vector>
-#include <thread>
-#include <atomic>
+
 #include <chrono>
+#include <vector>
+
 
 class PSVR2Device {
-public:
+   public:
     static constexpr uint16_t VID = 0x054c;
     static constexpr uint16_t PID = 0x0cde;
     static constexpr int CTRL_INTERFACE = 0;
@@ -16,7 +16,7 @@ public:
 
     PSVR2Device();
     ~PSVR2Device();
-    
+
     bool force_reboot();
     uint64_t retrieve_get_alt();
 
@@ -29,15 +29,16 @@ public:
     bool vendor_set(uint8_t report_id, uint16_t subcmd, const std::vector<uint8_t>& data = {}, int timeout = 1000);
     std::vector<uint8_t> get_config_desc(uint16_t length = 9);
     bool trigger_get_alt();
-    
+
     libusb_device_handle* get_handle() const { return dev_handle; }
     int raw_ctrl(uint8_t bmRequestType, uint8_t bRequest, uint16_t wValue, uint16_t wIndex, std::vector<uint8_t>& data, int timeout = 500);
-    
+
     bool has_firmware_mismatch() const { return firmware_mismatch; }
-private:
+
+   private:
     libusb_context* ctx;
     libusb_device_handle* dev_handle;
-    
+
     std::chrono::steady_clock::time_point last_keep_alive;
 
     bool firmware_mismatch = false;

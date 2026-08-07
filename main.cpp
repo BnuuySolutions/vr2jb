@@ -1,20 +1,20 @@
+#include <string>
+#include <thread>
+#include <vector>
+
 #include "bridge.hpp"
 #include "device.hpp"
 #include "downgrade.hpp"
 #include "logger.hpp"
-#include "utils.hpp"
 #include "rw.hpp"
 #include "shell.hpp"
-
-#include <thread>
-#include <vector>
-#include <string>
+#include "utils.hpp"
 
 int main(int argc, char* argv[]) {
     bool interactive = false;
     bool skip_wait = false;
     std::vector<std::string> command_args;
-    
+
     for (int i = 1; i < argc; ++i) {
         std::string arg = argv[i];
         if (arg == "-i") {
@@ -47,18 +47,17 @@ int main(int argc, char* argv[]) {
     LOG_INFO << "[+] Connected.\n";
 
     KernelRW krw(&usb);
-    
+
     // Give it 10 tries. It can happen that we don't get the sauth heap.
     for (int i = 0; i < 10; i++) {
         LOG_INFO << "[2/3] Setting up read...\n";
         if (!krw.setup_read()) {
             LOG_ERROR << "[-] Exploit init failed. Rebooting HMD to try again...\n";
             usb.force_reboot();
-        }
-        else {
+        } else {
             break;
         }
-        
+
         bool connected = false;
         for (int i = 0; i < 10; i++) {
             std::this_thread::sleep_for(std::chrono::seconds(1));
@@ -78,15 +77,15 @@ int main(int argc, char* argv[]) {
     }
 
     LOG_INFO << "[3/3] Setting up write...\n";
-    
+
     if (!krw.setup_write()) {
         LOG_WARN << "[!] Write unavailable - rebooting.\n";
         usb.force_reboot();
         return 1;
     }
-    
+
     krw.setup_jb_env();
-    
+
     PSVR2Bridge bridge(usb.get_handle());
     bridge.upload(Utils::get_executable_relative_path("busybox"), "/tmp/busybox");
     bridge.shell("/tmp/busybox mkdir /tmp/bin");
@@ -113,7 +112,7 @@ int main(int argc, char* argv[]) {
             usb.disconnect();
 
             LOG_ERROR << "[*] Jailbreak patch commands sent. Make sure the output above was successful.\n";
-            
+
             if (!skip_wait) {
                 std::this_thread::sleep_for(std::chrono::seconds(8));
             }

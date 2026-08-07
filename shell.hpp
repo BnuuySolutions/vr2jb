@@ -1,19 +1,20 @@
 #pragma once
 
-#include "device.hpp"
-#include "rw.hpp"
-#include "bridge.hpp"
-
 #include <string>
 #include <vector>
 
+#include "bridge.hpp"
+#include "device.hpp"
+#include "rw.hpp"
+
+
 class PSVR2Shell {
-public:
+   public:
     PSVR2Shell(PSVR2Device* usb, KernelRW* kernel_rw, PSVR2Bridge* bridge);
     void cmdloop();
     void execute_command(const std::vector<std::string>& args);
 
-private:
+   private:
     PSVR2Device* usb;
     KernelRW* krw;
     PSVR2Bridge* bridge;

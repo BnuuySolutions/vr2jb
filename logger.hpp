@@ -3,22 +3,17 @@
 #include <iostream>
 #include <sstream>
 
-enum class LogLevel {
-    L_DEBUG,
-    L_INFO,
-    L_WARNING,
-    L_ERROR
-};
+enum class LogLevel { L_DEBUG, L_INFO, L_WARNING, L_ERROR };
 
 class Logger {
-public:
+   public:
     static LogLevel current_level;
     static void set_level(LogLevel level);
     static LogLevel get_level();
 };
 
 class LogMessage {
-public:
+   public:
     LogMessage(LogLevel level);
     ~LogMessage();
 
@@ -36,7 +31,7 @@ public:
     typedef std::ios_base& (*IosBaseManipulator)(std::ios_base&);
     LogMessage& operator<<(IosBaseManipulator manip);
 
-private:
+   private:
     LogLevel level;
     std::ostringstream stream;
 };

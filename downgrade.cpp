@@ -1,8 +1,9 @@
 #include "downgrade.hpp"
-#include "logger.hpp"
 
 #include <cstring>
 #include <vector>
+
+#include "logger.hpp"
 
 #define REPORT_ID_SET_AUTH1_DATA 0xF0
 #define SUB_ID_H_CHALLENGE_1 0x01
@@ -110,8 +111,7 @@ void do_downgrade(PSVR2Device& usb) {
 
         uint16_t result = hmd2_overflow_val(usb, SET_AUTH1_DATA_OVERFLOW_VAL);
         if (result != sizeof(struct usb_auth1_data_overflow)) {
-            LOG_WARN << "[!] Attempting to crash PS VR2 failed, got an unexpected result. result: "
-                     << result << ", expected: " << sizeof(struct usb_auth1_data_overflow) << "\n";
+            LOG_WARN << "[!] Attempting to crash PS VR2 failed, got an unexpected result. result: " << result << ", expected: " << sizeof(struct usb_auth1_data_overflow) << "\n";
             continue;
         }
 

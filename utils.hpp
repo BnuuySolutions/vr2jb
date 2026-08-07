@@ -7,11 +7,11 @@
 #if defined(_WIN32)
 #include <windows.h>
 #elif defined(__APPLE__)
+#include <limits.h>
 #include <mach-o/dyld.h>
-#include <limits.h>
 #elif defined(__linux__)
-#include <unistd.h>
 #include <limits.h>
+#include <unistd.h>
 #endif
 
 namespace Utils {
@@ -55,6 +55,6 @@ inline std::string get_executable_relative_path(const std::string& rel_path) {
     return (get_executable_dir() / p).lexically_normal().string();
 }
 
-} // namespace Utils
+}  // namespace Utils
 
-#endif // UTILS_HPP
+#endif  // UTILS_HPP

