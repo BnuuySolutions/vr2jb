@@ -1,6 +1,7 @@
 #include "rw.hpp"
 #include "constants.hpp"
 #include "logger.hpp"
+#include "utils.hpp"
 
 #include <algorithm>
 #include <chrono>
@@ -718,7 +719,7 @@ bool KernelRW::trigger_workqueue(uint64_t target_func_addr) {
 bool KernelRW::upload_to_tmp(const std::string& local_path, const std::string& remote_name) {
     std::ifstream elf_file(local_path, std::ios::binary);
     if (!elf_file) {
-        LOG_ERROR << "[-] Could not read local file.\n";
+        LOG_ERROR << "[-] Could not read local file '" << local_path << "'.\n";
         return false;
     }
     std::vector<uint8_t> elf_data((std::istreambuf_iterator<char>(elf_file)), {});
@@ -1053,7 +1054,7 @@ bool KernelRW::setup_jb_env() {
             write_u64_fast(constants::TEXT_ALLOC_BASE, rwx_base);
             
             // Upload and execute vr2bridge
-            upload_to_tmp("./vr2bridge", "vr2bridge");
+            upload_to_tmp(Utils::get_executable_relative_path("vr2bridge"), "vr2bridge");
             execute_elf("/tmp/vr2bridge", {});
 
             return true;

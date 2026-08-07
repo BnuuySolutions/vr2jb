@@ -2,6 +2,7 @@
 #include "device.hpp"
 #include "downgrade.hpp"
 #include "logger.hpp"
+#include "utils.hpp"
 #include "rw.hpp"
 #include "shell.hpp"
 
@@ -84,7 +85,7 @@ int main(int argc, char* argv[]) {
     krw.setup_jb_env();
     
     PSVR2Bridge bridge(usb.get_handle());
-    bridge.upload("./busybox", "/tmp/busybox");
+    bridge.upload(Utils::get_executable_relative_path("busybox"), "/tmp/busybox");
     bridge.shell("/tmp/busybox mkdir /tmp/bin");
     bridge.shell("/tmp/busybox --install /tmp/bin");
 
@@ -102,7 +103,7 @@ int main(int argc, char* argv[]) {
             shell.execute_command(command_args);
         } else {
             LOG_ERROR << "[-] No command specified. Applying jailbreak patches.\n";
-            shell.execute_command({"upload", "./patcher", "/tmp/patcher"});
+            shell.execute_command({"upload", Utils::get_executable_relative_path("patcher"), "/tmp/patcher"});
             shell.execute_command({"shell", "/tmp/patcher"});
             shell.execute_command({"shell", "echo", "\"pwmLEDx 2 2 0 3 0 0 0 0 0 0 0 100 1800 0 200 0 0\"", ">", "/sys/devices/platform/soc/10010000.pwrap/10010000.pwrap:mt3615/mtk_pwm_intf/pwm_manus"});
 
